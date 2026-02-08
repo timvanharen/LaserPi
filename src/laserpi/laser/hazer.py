@@ -1,6 +1,15 @@
 """
 Hazer/Smoke Generator DMX Control
 Simple abstraction for fog/haze machines with single-channel control
+
+⚠️ IMPORTANT: Most hazers require 3-5 minutes warm-up time after power-on
+before they can produce smoke. Wait for the heater to reach temperature!
+
+Typical hazer warm-up indicators:
+- Ready LED lights up (green)
+- Warm-up LED turns off (red)
+- Some have audio beeps when ready
+- Check your hazer's manual for specific indicators
 """
 from ..dmx.universe import DMXUniverse
 
@@ -9,8 +18,17 @@ class Hazer:
     """
     Simple hazer/smoke generator controller.
     
+    ⚠️ WARM-UP REQUIRED: Wait 3-5 minutes after power-on before expecting smoke!
+    
     DMX Channel Map:
     - Channel 1 (offset 0): Smoke output (0-100%, maps to DMX 0-255)
+    
+    Troubleshooting:
+    - No smoke output? Check:
+      1. Is the heater warmed up? (Wait 3-5 minutes, check ready indicator)
+      2. Is fluid tank full?
+      3. Is DMX address correct? (Use address_scanner.py to verify)
+      4. Is the hazer powered on?
     
     Usage:
         hazer = Hazer(universe, base_address=21, name="Main Hazer")

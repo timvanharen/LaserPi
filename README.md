@@ -241,6 +241,8 @@ Control a DMX hazer or fog machine at address 21:
 python3 hazer_control.py
 ```
 
+⚠️ **Important**: Most hazers require **3-5 minutes warm-up time** after power-on before the heater reaches operating temperature. Wait for the "ready" indicator (green LED, beep, etc.) before expecting smoke output.
+
 Commands:
 - `[0-100]` - Set output percentage directly (e.g., `50` for 50%)
 - `on` - Turn on at 100%
@@ -249,7 +251,29 @@ Commands:
 - `demo` - Run demonstration sequence
 - `status` - Show current output level
 
-#### 8. Complete Show Example
+**Troubleshooting**: If hazer doesn't produce smoke, see the Address Scanner below to verify DMX address.
+
+#### 8. DMX Address Scanner
+
+Find DMX device addresses and verify communication:
+
+```bash
+python3 address_scanner.py
+```
+
+This tool helps you:
+- **Scan address ranges** - Sends test signals to find responsive devices
+- **Pulse specific addresses** - On/off cycles to confirm device is responding
+- **Ramp values** - Gradual 0-255 sweep to see device behavior
+- **Set manual values** - Direct control for detailed testing
+
+**Use this when**:
+- Hazer doesn't respond at expected address
+- Unsure what address a device is configured to
+- Verifying DMX communication is working
+- Checking for address conflicts
+
+#### 9. Complete Show Example
 
 See a coordinated show with lasers and hazer:
 
@@ -328,6 +352,7 @@ LaserPi/
 │   ├── galvo_tuning.py     # Galvo motor calibration tool
 │   ├── draw_shapes.py      # Custom shape drawing with calibration
 │   ├── hazer_control.py    # Hazer/smoke generator control
+│   ├── address_scanner.py  # DMX address discovery tool
 │   ├── show_example.py     # Complete show with lasers + hazer
 │   └── test_rs485.py       # RS485 communication test
 ├── scripts/
@@ -355,6 +380,31 @@ If this shows errors, the issue is with the adapter/port, not DMX protocol.
 1. Check USB adapter is connected: `lsusb`
 2. Check kernel messages: `dmesg | grep tty`
 3. Verify user is in `dialout` group: `groups`
+
+### Hazer not producing smoke
+
+**Most common causes**:
+
+1. **Heater not warmed up** (⚠️ #1 issue)
+   - Wait 3-5 minutes after power-on
+   - Look for "ready" indicator (green LED, beep)
+   - Some hazers take longer on first use or when cold
+
+2. **Wrong DMX address**
+   - Use the address scanner: `python3 address_scanner.py`
+   - Try quick scan (1-30) to find your hazer
+   - Reconfigure hazer to address 21, or update `config.py` to match
+
+3. **Fluid tank empty**
+   - Check and refill fog/haze fluid
+
+4. **Hazer not in DMX mode**
+   - Some hazers have DMX/Manual/Master-Slave modes
+   - Ensure it's set to DMX mode
+
+5. **DMX wiring issue**
+   - Verify hazer is at end of DMX chain (after lasers)
+   - Check connections: RS485 A→XLR Pin 3, B→Pin 2
 
 ### Diagonal lines look curved or jagged
 
