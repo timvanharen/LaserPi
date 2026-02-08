@@ -64,8 +64,8 @@ Each MK2 laser uses 9 DMX channels:
 | | 11-255 | X axis positioning |
 | 4 | 1-10 | Center position on Y axis |
 | | 11-255 | Y axis positioning |
-| 5 | 0-255 | Scanning speed |
-| 6 | 0-255 | Dynamic pattern speed |
+| 5 | 0-255 | Scanning speed (mirror movement speed) |
+| 6 | 0-255 | Dynamic pattern speed (pattern change rate) |
 | 7 | 0-255 | Zoom / size |
 | 8 | 0-255 | Color |
 | 9 | 0-255 | Color segment |
@@ -182,6 +182,27 @@ python3 test_rs485.py
 
 This sends "hej bro" every second at 9600 baud. If you see no errors, your adapter is working. You can verify reception with another RS485 device or a USB-serial adapter in receive mode.
 
+#### 5. Color & Color Segment Explorer
+
+Understand what Channel 8 (Color) and Channel 9 (Color Segment) do:
+
+```bash
+python3 color_test.py
+```
+
+Commands:
+- `c [0-255]` - Set color
+- `s [0-255]` - Set color segment
+- `scan-c` - Auto-scan through all color values
+- `scan-s` - Auto-scan through all color segment values
+- `scan-both` - Scan both simultaneously
+- `p [0-255]` - Change pattern to see effects on different patterns
+
+**What these channels typically do:**
+- **Channel 8 (Color)**: Selects color from a palette (0=Red → 64=Green → 128=Blue → 192=White, approximately)
+- **Channel 9 (Color Segment)**: Controls which parts of the pattern are colored vs. blank, or may enable multicolor effects
+- Behavior varies by pattern - experiment to find what works best!
+
 ### Python API
 
 Create your own scripts using the LaserPi API:
@@ -239,12 +260,15 @@ LaserPi/
 │   └── config.py           # Configuration constants
 ├── examples/
 │   ├── basic_on.py         # Basic control test
-│   ├── pattern_scan.py     # Pattern discovery tool
-│   └── circle_test.py      # Interactive circle control
+│   ├── pattern_scan.py     # Pattern discovery tool (static & dynamic)
+│   ├── circle_test.py      # Interactive circle control
+│   ├── color_test.py       # Color & color segment explorer
+│   └── test_rs485.py       # RS485 communication test
 ├── scripts/
 │   └── setup_pi.sh         # Raspberry Pi setup script
 ├── docs/
 │   └── MK2_manual.pdf      # Laser manual
+├── CONTRIBUTING.md         # How to contribute your discoveries
 └── requirements.txt        # Python dependencies
 ```
 
@@ -302,6 +326,17 @@ DMX_BREAK_TIME_US = 200  # Increase if needed (min 92 μs, max ~1000 μs)
 - ✅ Discover and control circular patterns via Channel 2
 - 🎯 Fine-tune colors, position, zoom, and speed for circles
 - 🎯 Attempt to create custom shapes or logo patterns (experimental)
+
+## Contributing
+
+Found interesting patterns? Discovered what the color channels do? **Please share your findings!**
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to:
+- Document pattern discoveries in [docs/pattern_reference.md](docs/pattern_reference.md)
+- Submit improvements to the codebase
+- Report bugs or request features
+
+Your contributions help everyone understand these lasers better! 🎆
 
 ## Technical Details
 

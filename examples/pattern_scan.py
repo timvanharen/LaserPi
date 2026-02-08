@@ -23,11 +23,10 @@ def main():
     print("This script helps you discover MK2 patterns by cycling")
     print("through all 256 pattern values on Channel 2.")
     print()
-    print("Both lasers will be set to STATIC_PATTERN mode.")
-    print()
     print("Controls:")
     print("  [Enter]     - Next pattern")
     print("  [Number]    - Jump to specific pattern")
+    print("  [m]         - Toggle mode (Static/Dynamic)")
     print("  [q]         - Quit")
     print()
     print("Note down pattern numbers that create circles or")
@@ -43,22 +42,25 @@ def main():
     laser2 = MK2(universe, LASER2_ADDRESS, name="Laser 2")
     
     current_pattern = 0
+    current_mode = MK2Mode.STATIC_PATTERN
+    mode_name = "STATIC"
     
     try:
         # Start DMX transmission
         driver.start(universe)
         time.sleep(0.5)
         
-        # Configure both lasers in static pattern mode
+        # Configure both lasers
         for laser in [laser1, laser2]:
-            laser.set_mode(MK2Mode.STATIC_PATTERN)
+            laser.set_mode(current_mode)
             laser.center()
             laser.set_color(255)  # White
             laser.set_color_segment(0)
             laser.set_zoom(128)
             laser.set_scanning_speed(128)
+            laser.set_dynamic_speed(128)  # For dynamic patterns
         
-        print("✓ Lasers ready! Starting pattern scan...")
+        print(f"✓ Lasers ready! Starting pattern scan in {mode_name} mode...")
         print()
         
         # Pattern scan loop
@@ -68,8 +70,8 @@ def main():
             laser2.set_pattern(current_pattern)
             
             print(f"\r{'=' * 60}", end='')
-            print(f"\rPattern {current_pattern:3d}/255 | ", end='')
-            print(f"Next: [Enter] | Jump: [0-255] | Quit: [q] ", end='', flush=True)
+            print(f"\rMode: {mode_name:7s} | Pattern {current_pattern:3d}/255 | ", end='')
+            print(f"[Enter]=Next [0-255]=Jump [m]=Mode [q]=Quit ", end='', flush=True)
             
             # Wait for user input
             user_input = input("\n> ").strip().lower()
@@ -80,6 +82,17 @@ def main():
             elif user_input == '':
                 # Next pattern
                 current_pattern = (current_pattern + 1) % 256
+            elif user_input == 'm':
+                # Toggle mode
+                if current_mode == MK2Mode.STATIC_PATTERN:
+                    current_mode = MK2Mode.DYNAMIC_PATTERN
+                    mode_name = "DYNAMIC"
+                else:
+                    current_mode = MK2Mode.STATIC_PATTERN
+                    mode_name = "STATIC"
+                laser1.set_mode(current_mode)
+                laser2.set_mode(current_mode)
+                print(f"\nSwitched to {mode_name} pattern mode")
             elif user_input.isdigit():
                 # Jump to specific pattern
                 new_pattern = int(user_input)
@@ -89,7 +102,7 @@ def main():
                 else:
                     print("Invalid pattern number (must be 0-255)")
             else:
-                print("Invalid input. Use [Enter], [0-255], or [q]")
+                print("Invalid input. Use [Enter], [0-255], [m], or [q]")
         
         # Turn off lasers
         print("\nTurning lasers off...")
