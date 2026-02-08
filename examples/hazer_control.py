@@ -17,13 +17,15 @@ from laserpi.config import HAZER_ADDRESS
 
 def print_controls():
     print("\nControls:")
-    print("  [0-100]     - Set output percentage (e.g., '50' for 50%)")
-    print("  on          - Turn on at 100%")
-    print("  off         - Turn off")
-    print("  fade [0-100] - Fade to target percentage over 3 seconds")
-    print("  status      - Show current output level")
-    print("  demo        - Run demo sequence")
-    print("  q           - Quit")
+    print("  [0-100]       - Set output percentage (e.g., '50' for 50%)")
+    print("  on            - Turn on at 100% (continuous)")
+    print("  off           - Turn off")
+    print("  burst         - Fire a smoke burst (100% output, timed)")
+    print("  duration [val]- Set channel 2 duration (0=continuous, 1-255=timed)")
+    print("  fade [0-100]  - Fade to target percentage over 3 seconds")
+    print("  status        - Show current output level")
+    print("  demo          - Run demo sequence")
+    print("  q             - Quit")
     print()
 
 
@@ -60,26 +62,28 @@ def demo_sequence(hazer):
 
 def main():
     print("=" * 60)
-    print("LaserPi - Hazer/Smoke Generator Control")
+    print("LaserPi - BeamZ S1500 DMX MKII Smoke Machine Control")
     print("=" * 60)
     print()
-    print(f"Controlling hazer at DMX address {HAZER_ADDRESS}")
-    print("Channel 1: Smoke output (0-100%)")
+    print(f"Controlling S1500 at DMX address {HAZER_ADDRESS} (2 channels)")
+    print(f"  Channel 1 (addr {HAZER_ADDRESS}): Smoke output (0-100%)")
+    print(f"  Channel 2 (addr {HAZER_ADDRESS + 1}): Duration (0=continuous, 1-255=timed)")
     print()
-    print("⚠️  IMPORTANT: Hazer warm-up time")
-    print("   Most hazers need 3-5 minutes after power-on to heat up")
-    print("   before they can produce smoke.")
+    print("⚠️  IMPORTANT: BeamZ S1500 warm-up time")
+    print("   The S1500 needs 5-8 minutes after power-on to heat up.")
     print()
-    print("   Wait for your hazer's 'ready' indicator:")
-    print("     • Green 'Ready' LED lights up")
-    print("     • Red 'Heating' LED turns off")
-    print("     • Audio beep (on some models)")
+    print("   How to know the heater is ready:")
+    print("     • RED LED on back panel ON  → Still heating, WAIT!")
+    print("     • RED LED on back panel OFF → Ready to produce smoke!")
+    print()
+    print("   The timer remote is NOT required for DMX operation.")
+    print("   The S1500 works in DMX mode without the remote connected.")
     print()
     print("   If no smoke appears, check:")
-    print("     1. Heater is warmed up (wait longer)")
+    print("     1. Red LED is OFF (heater ready)")
     print("     2. Fluid tank is full")
     print("     3. DMX address is correct (run address_scanner.py)")
-    print("     4. Hazer is powered on")
+    print("     4. DIP switches set correctly for DMX mode")
     print()
     
     # Create DMX universe and driver
@@ -120,8 +124,27 @@ def main():
                 
                 elif user_input == 'status':
                     output = hazer.get_output()
+                    duration = hazer.get_duration()
                     print(f"\nCurrent output: {output:.1f}%")
-                    print(f"DMX value: {universe.get_channel(HAZER_ADDRESS)}/255\n")
+                    print(f"DMX ch1 (smoke):    {universe.get_channel(HAZER_ADDRESS)}/255")
+                    print(f"DMX ch2 (duration): {duration}/255 ({'continuous' if duration == 0 else 'timed'})\n")
+                
+                elif user_input == 'burst':
+                    print("Firing smoke burst...")
+                    hazer.burst(100.0, 128)
+                    print("✓ Burst fired (set to 0 to stop)")
+                
+                elif user_input.startswith('duration '):
+                    try:
+                        val = int(user_input.split()[1])
+                        if 0 <= val <= 255:
+                            hazer.set_duration(val)
+                            mode = "continuous" if val == 0 else f"timed ({val})"
+                            print(f"✓ Duration set to {val} ({mode})")
+                        else:
+                            print("❌ Value must be between 0 and 255")
+                    except (ValueError, IndexError):
+                        print("❌ Usage: duration [0-255]")
                 
                 elif user_input == 'demo':
                     demo_sequence(hazer)

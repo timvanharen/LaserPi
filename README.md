@@ -13,8 +13,8 @@ LaserPi is a Python-based DMX512 controller designed to run on a Raspberry Pi 4 
 - **Two Laserworld EL-230RGB MK2 lasers**
   - Laser 1: DMX address 1
   - Laser 2: DMX address 10
-- **Hazer/Smoke generator** (optional)
-  - Hazer: DMX address 21
+- **BeamZ S1500 DMX MKII Smoke Machine** (optional)
+  - DMX address 21 (2 channels: 21-22)
 - **DMX cables** (3-pin or 5-pin XLR)
 - **120Ω termination resistor** (at end of DMX chain, if not built into last fixture)
 
@@ -381,29 +381,36 @@ If this shows errors, the issue is with the adapter/port, not DMX protocol.
 2. Check kernel messages: `dmesg | grep tty`
 3. Verify user is in `dialout` group: `groups`
 
-### Hazer not producing smoke
+### BeamZ S1500 not producing smoke
 
 **Most common causes**:
 
 1. **Heater not warmed up** (⚠️ #1 issue)
-   - Wait 3-5 minutes after power-on
-   - Look for "ready" indicator (green LED, beep)
-   - Some hazers take longer on first use or when cold
+   - The S1500 needs **5-8 minutes** after power-on to heat up
+   - **RED LED on back panel ON** = still heating → WAIT
+   - **RED LED on back panel OFF** = heater ready → can produce smoke
+   - The timer remote is NOT required for DMX operation
 
-2. **Wrong DMX address**
+2. **Channel 2 (duration) not set correctly**
+   - The S1500 uses 2 DMX channels
+   - Channel 1 (addr 21): Smoke output amount
+   - Channel 2 (addr 22): Duration control (0 = continuous)
+   - Try setting Ch1=255 AND Ch2=0 for continuous full output
+
+3. **Wrong DMX address**
    - Use the address scanner: `python3 address_scanner.py`
-   - Try quick scan (1-30) to find your hazer
-   - Reconfigure hazer to address 21, or update `config.py` to match
+   - Try quick scan (1-30) to find your S1500
+   - Reconfigure S1500 to address 21, or update `config.py` to match
 
-3. **Fluid tank empty**
+4. **Fluid tank empty**
    - Check and refill fog/haze fluid
 
-4. **Hazer not in DMX mode**
-   - Some hazers have DMX/Manual/Master-Slave modes
-   - Ensure it's set to DMX mode
+5. **DIP switches not set for DMX mode**
+   - Verify the S1500 DIP switches are configured for DMX addressing
+   - The S1500 works in DMX mode without the timer remote
 
-5. **DMX wiring issue**
-   - Verify hazer is at end of DMX chain (after lasers)
+6. **DMX wiring issue**
+   - Verify S1500 is at end of DMX chain (after lasers)
    - Check connections: RS485 A→XLR Pin 3, B→Pin 2
 
 ### Diagonal lines look curved or jagged

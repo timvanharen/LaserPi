@@ -13,11 +13,11 @@ LASER1_ADDRESS = 1  # First MK2 laser base address
 LASER2_ADDRESS = 10  # Second MK2 laser base address
 
 # Hazer/Smoke generator DMX address
-HAZER_ADDRESS = 21  # Hazer base address
+HAZER_ADDRESS = 21  # BeamZ S1500 MKII base address (uses 2 channels: 21-22)
 
 # DMX timing (microseconds)
 DMX_BREAK_TIME_US = 150  # Break signal duration (min 92 μs)
 DMX_MAB_TIME_US = 12  # Mark After Break duration (min 12 μs)
 
-# Number of channels to transmit (optimize for 2 lasers × 9 channels + hazer)
-DMX_CHANNEL_COUNT = 21  # Covers addresses 1-21
+# Number of channels to transmit (optimize for 2 lasers × 9 channels + hazer × 2 channels)
+DMX_CHANNEL_COUNT = 22  # Covers addresses 1-22

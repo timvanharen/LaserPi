@@ -1,49 +1,66 @@
 """
-Hazer/Smoke Generator DMX Control
-Simple abstraction for fog/haze machines with single-channel control
+BeamZ S1500 DMX MKII Smoke Machine Controller
 
-⚠️ IMPORTANT: Most hazers require 3-5 minutes warm-up time after power-on
-before they can produce smoke. Wait for the heater to reach temperature!
+DMX control for the BeamZ S1500 MKII fog/smoke machine.
+This machine uses 2 DMX channels.
 
-Typical hazer warm-up indicators:
-- Ready LED lights up (green)
-- Warm-up LED turns off (red)
-- Some have audio beeps when ready
-- Check your hazer's manual for specific indicators
+⚠️ IMPORTANT: The S1500 needs 5-8 minutes warm-up time after power-on!
+The heater must reach operating temperature before it can produce smoke.
+
+How to know the S1500 heater is ready:
+- The S1500 has a RED LED on the back panel
+- RED LED ON (solid) = still heating up → WAIT
+- RED LED OFF = heater ready → can produce smoke
+- Warm-up takes approximately 5-8 minutes
+
+The timer remote is NOT required for DMX operation.
+The S1500 works in DMX mode independently of the timer remote.
 """
+import time as _time
+
 from ..dmx.universe import DMXUniverse
 
 
 class Hazer:
     """
-    Simple hazer/smoke generator controller.
+    BeamZ S1500 DMX MKII Smoke Machine controller.
     
-    ⚠️ WARM-UP REQUIRED: Wait 3-5 minutes after power-on before expecting smoke!
+    ⚠️ WARM-UP: Wait 5-8 min after power-on! Red LED OFF = ready.
     
-    DMX Channel Map:
-    - Channel 1 (offset 0): Smoke output (0-100%, maps to DMX 0-255)
+    DMX Channel Map (2 channels):
+    - Channel 1 (offset 0): Smoke output (0-255, 0=off, 255=full)
+    - Channel 2 (offset 1): Duration control (0-255)
+        0     = continuous output (as long as ch1 > 0)
+        1-255 = timed burst duration
+    
+    The timer remote is NOT required for DMX mode.
     
     Troubleshooting:
     - No smoke output? Check:
-      1. Is the heater warmed up? (Wait 3-5 minutes, check ready indicator)
+      1. Is the RED LED off? (If on → still heating, wait 5-8 min)
       2. Is fluid tank full?
       3. Is DMX address correct? (Use address_scanner.py to verify)
-      4. Is the hazer powered on?
+      4. Is the machine set to DMX mode? (Check DIP switches)
+      5. Try setting Channel 1 to 255 AND Channel 2 to 0
     
     Usage:
-        hazer = Hazer(universe, base_address=21, name="Main Hazer")
-        hazer.set_output(50)  # 50% smoke output
-        hazer.off()           # Turn off
+        hazer = Hazer(universe, base_address=21, name="S1500")
+        hazer.set_output(50)       # 50% smoke output (continuous)
+        hazer.set_duration(128)    # Set burst duration
+        hazer.off()                # Turn off
     """
     
-    def __init__(self, universe: DMXUniverse, base_address: int, name: str = "Hazer"):
+    # Number of DMX channels this device uses
+    CHANNEL_COUNT = 2
+    
+    def __init__(self, universe: DMXUniverse, base_address: int, name: str = "S1500"):
         """
-        Initialize hazer controller.
+        Initialize smoke machine controller.
         
         Args:
             universe: DMXUniverse instance to control
-            base_address: Base DMX address for this hazer (e.g., 21)
-            name: Friendly name for this hazer
+            base_address: Base DMX address (e.g., 21)
+            name: Friendly name for this unit
         
         Raises:
             ValueError: If base_address is out of valid range
@@ -65,7 +82,7 @@ class Hazer:
     
     def set_output(self, percent: float) -> None:
         """
-        Set smoke/haze output level.
+        Set smoke output level.
         
         Args:
             percent: Output level as percentage (0.0 to 100.0)
@@ -82,7 +99,7 @@ class Hazer:
     
     def get_output(self) -> float:
         """
-        Get current smoke/haze output level as percentage.
+        Get current smoke output level as percentage.
         
         Returns:
             Output level (0.0 to 100.0)
@@ -90,18 +107,48 @@ class Hazer:
         dmx_value = self._get_channel(0)
         return (dmx_value / 255.0) * 100.0
     
+    def set_duration(self, value: int) -> None:
+        """
+        Set burst duration on channel 2.
+        
+        Args:
+            value: Duration value (0-255)
+                   0 = continuous output
+                   1-255 = timed burst
+        """
+        if not 0 <= value <= 255:
+            raise ValueError(f"Duration must be between 0 and 255, got {value}")
+        self._set_channel(1, value)
+    
+    def get_duration(self) -> int:
+        """Get current duration channel value."""
+        return self._get_channel(1)
+    
     def on(self, percent: float = 100.0) -> None:
         """
-        Turn hazer on at specified output level.
+        Turn smoke machine on at specified output level (continuous mode).
         
         Args:
             percent: Output level (default: 100%)
         """
+        self.set_duration(0)  # Continuous mode
         self.set_output(percent)
     
     def off(self) -> None:
-        """Turn hazer off."""
+        """Turn smoke machine off."""
         self.set_output(0)
+        self.set_duration(0)
+    
+    def burst(self, percent: float = 100.0, duration_value: int = 128) -> None:
+        """
+        Fire a timed burst of smoke.
+        
+        Args:
+            percent: Output level (default: 100%)
+            duration_value: Burst duration (1-255, higher = longer)
+        """
+        self.set_duration(duration_value)
+        self.set_output(percent)
     
     def fade(self, target_percent: float, duration: float = 2.0, steps: int = 20) -> None:
         """
@@ -115,8 +162,6 @@ class Hazer:
         Example:
             hazer.fade(50, duration=3.0)  # Fade to 50% over 3 seconds
         """
-        import time
-        
         current = self.get_output()
         step_size = (target_percent - current) / steps
         step_delay = duration / steps
@@ -124,7 +169,7 @@ class Hazer:
         for i in range(steps + 1):
             output = current + (step_size * i)
             self.set_output(output)
-            time.sleep(step_delay)
+            _time.sleep(step_delay)
     
     def __repr__(self) -> str:
-        return f"Hazer(name='{self.name}', address={self.base_address})"
+        return f"Hazer(name='{self.name}', address={self.base_address}, channels={self.CHANNEL_COUNT})"
