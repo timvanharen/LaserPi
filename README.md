@@ -203,6 +203,30 @@ Commands:
 - **Channel 9 (Color Segment)**: Controls which parts of the pattern are colored vs. blank, or may enable multicolor effects
 - Behavior varies by pattern - experiment to find what works best!
 
+#### 6. Galvo Motor Calibration
+
+🎯 **Advanced**: Tune galvo motors to improve diagonal line straightness:
+
+```bash
+python3 galvo_tuning.py
+```
+
+**Why this matters**: Horizontal and vertical lines use only one galvo motor (X or Y), so they're naturally straight. Diagonal lines require both motors to move simultaneously, and if they have different response times, diagonals appear curved or jagged.
+
+This tool lets you:
+- Draw test patterns (lines, diagonals, circles, boxes)
+- Adjust lag compensation values for X and Y axes
+- Save calibration for use in custom drawing scripts
+- Test geometric corrections
+
+**Note**: Built-in MK2 patterns can't use calibration, but custom scripts that use `set_position()` for drawing can apply the calibration.
+
+**After calibration**, try the shape drawing example:
+```bash
+python3 draw_shapes.py
+```
+This demonstrates drawing squares, triangles, stars, and circles with your calibration applied.
+
 ### Python API
 
 Create your own scripts using the LaserPi API:
@@ -263,11 +287,14 @@ LaserPi/
 │   ├── pattern_scan.py     # Pattern discovery tool (static & dynamic)
 │   ├── circle_test.py      # Interactive circle control
 │   ├── color_test.py       # Color & color segment explorer
+│   ├── galvo_tuning.py     # Galvo motor calibration tool
+│   ├── draw_shapes.py      # Custom shape drawing with calibration
 │   └── test_rs485.py       # RS485 communication test
 ├── scripts/
 │   └── setup_pi.sh         # Raspberry Pi setup script
 ├── docs/
-│   └── MK2_manual.pdf      # Laser manual
+│   ├── MK2_manual.pdf      # Laser manual
+│   └── pattern_reference.md # Complete pattern documentation
 ├── CONTRIBUTING.md         # How to contribute your discoveries
 └── requirements.txt        # Python dependencies
 ```
@@ -288,6 +315,16 @@ If this shows errors, the issue is with the adapter/port, not DMX protocol.
 1. Check USB adapter is connected: `lsusb`
 2. Check kernel messages: `dmesg | grep tty`
 3. Verify user is in `dialout` group: `groups`
+
+### Diagonal lines look curved or jagged
+
+**This is normal** - it's due to galvo motor dynamics. Horizontal/vertical lines use only one motor, but diagonals require both X and Y motors to move simultaneously. If they have slightly different response times, diagonals won't be perfectly straight.
+
+**Solutions**:
+1. Use the `galvo_tuning.py` script to calibrate lag compensation
+2. Increase scanning speed (Ch5: 150-200) - faster scanning can reduce visible artifacts
+3. Use built-in MK2 patterns when possible - they're optimized by the firmware
+4. For custom drawing, apply calibration corrections (see [examples/galvo_tuning.py](examples/galvo_tuning.py))
 
 ### Lasers not responding
 
@@ -323,9 +360,12 @@ DMX_BREAK_TIME_US = 200  # Increase if needed (min 92 μs, max ~1000 μs)
 
 - ✅ Generate DMX commands from Raspberry Pi
 - ✅ Control two MK2 lasers independently
-- ✅ Discover and control circular patterns via Channel 2
-- 🎯 Fine-tune colors, position, zoom, and speed for circles
+- ✅ Discover and control patterns via Channel 2 (all 256 static & dynamic patterns documented!)
+- ✅ Document color, position, zoom, and speed effects
+- ✅ Create galvo calibration tool for improved line straightness
 - 🎯 Attempt to create custom shapes or logo patterns (experimental)
+
+**See [docs/pattern_reference.md](docs/pattern_reference.md) for complete pattern documentation!**
 
 ## Contributing
 
