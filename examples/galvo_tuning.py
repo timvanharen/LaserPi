@@ -265,9 +265,9 @@ def main():
         time.sleep(0.5)
         
         # Configure laser - use a static pattern that shows position clearly
-        print("Setting up laser with single dot pattern...")
+        print("Setting up laser with horizontal line pattern...")
         laser.set_mode(MK2Mode.STATIC_PATTERN)
-        laser.set_pattern(0)  # Single dot or simple pattern
+        laser.set_pattern(60)  # Horizontal line (~40% length) - shows position clearly
         laser.center()
         laser.set_color(255)
         laser.set_color_segment(0)

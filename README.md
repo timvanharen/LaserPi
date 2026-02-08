@@ -13,6 +13,8 @@ LaserPi is a Python-based DMX512 controller designed to run on a Raspberry Pi 4 
 - **Two Laserworld EL-230RGB MK2 lasers**
   - Laser 1: DMX address 1
   - Laser 2: DMX address 10
+- **Hazer/Smoke generator** (optional)
+  - Hazer: DMX address 21
 - **DMX cables** (3-pin or 5-pin XLR)
 - **120Ω termination resistor** (at end of DMX chain, if not built into last fixture)
 
@@ -41,10 +43,13 @@ Raspberry Pi USB port
                       +--> Laser 1 (DMX In, address 1)
                                |
                                +--> DMX Out → Laser 2 (DMX In, address 10)
+                                        |
+                                        +--> DMX Out → Hazer (DMX In, address 21)
 ```
 
 ⚠️ **Important Notes**:
 - Ensure lasers are set to DMX mode with correct addresses (1 and 10)
+- Set hazer to DMX address 21 (if using)
 - **If lasers don't respond, try swapping RS485 A/B wires** - polarity labeling varies between adapters
 - Use proper DMX cable (not standard mic cable) for reliable operation
 
@@ -119,6 +124,7 @@ SERIAL_PORT = "/dev/ttyUSB0"  # or "/dev/dmx0" if udev rule is active
 DMX_REFRESH_HZ = 40           # DMX packet rate (25-44 Hz typical)
 LASER1_ADDRESS = 1            # First laser DMX address
 LASER2_ADDRESS = 10           # Second laser DMX address
+HAZER_ADDRESS = 21            # Hazer DMX address (if using)
 ```
 
 ## Usage
@@ -227,6 +233,32 @@ python3 draw_shapes.py
 ```
 This demonstrates drawing squares, triangles, stars, and circles with your calibration applied.
 
+#### 7. Hazer/Smoke Generator Control
+
+Control a DMX hazer or fog machine at address 21:
+
+```bash
+python3 hazer_control.py
+```
+
+Commands:
+- `[0-100]` - Set output percentage directly (e.g., `50` for 50%)
+- `on` - Turn on at 100%
+- `off` - Turn off
+- `fade [0-100]` - Fade to target percentage over 3 seconds
+- `demo` - Run demonstration sequence
+- `status` - Show current output level
+
+#### 8. Complete Show Example
+
+See a coordinated show with lasers and hazer:
+
+```bash
+python3 show_example.py
+```
+
+This demonstrates synchronized control of both lasers and hazer with scene transitions.
+
 ### Python API
 
 Create your own scripts using the LaserPi API:
@@ -236,21 +268,25 @@ import sys
 sys.path.insert(0, '../src')
 
 from laserpi.dmx import DMXUniverse, DMXDriver
-from laserpi.laser import MK2, MK2Mode
-from laserpi.config import LASER1_ADDRESS, LASER2_ADDRESS
+from laserpi.laser import MK2, MK2Mode, Hazer
+from laserpi.config import LASER1_ADDRESS, LASER2_ADDRESS, HAZER_ADDRESS
 import time
 
 # Initialize
 universe = DMXUniverse()
 driver = DMXDriver()
 
-# Create laser controllers
+# Create controllers
 laser1 = MK2(universe, LASER1_ADDRESS, name="Laser 1")
 laser2 = MK2(universe, LASER2_ADDRESS, name="Laser 2")
+hazer = Hazer(universe, HAZER_ADDRESS, name="Main Hazer")
 
 # Start DMX transmission (40 Hz continuous update)
 driver.start(universe)
 time.sleep(0.5)
+
+# Start hazer at 50%
+hazer.set_output(50)
 
 # Configure laser 1
 laser1.set_mode(MK2Mode.STATIC_PATTERN)
@@ -266,6 +302,7 @@ time.sleep(10)
 # Cleanup
 laser1.off()
 laser2.off()
+hazer.off()
 driver.stop()
 ```
 
@@ -278,7 +315,8 @@ LaserPi/
 │   │   ├── driver.py       # DMX512 serial driver
 │   │   └── universe.py     # 512-channel DMX buffer
 │   ├── laser/
-│   │   └── mk2.py          # MK2 laser abstraction
+│   │   ├── mk2.py          # MK2 laser abstraction
+│   │   └── hazer.py        # Hazer/smoke generator abstraction
 │   ├── effects/
 │   │   └── shapes.py       # Shape generation helpers
 │   └── config.py           # Configuration constants
@@ -289,6 +327,8 @@ LaserPi/
 │   ├── color_test.py       # Color & color segment explorer
 │   ├── galvo_tuning.py     # Galvo motor calibration tool
 │   ├── draw_shapes.py      # Custom shape drawing with calibration
+│   ├── hazer_control.py    # Hazer/smoke generator control
+│   ├── show_example.py     # Complete show with lasers + hazer
 │   └── test_rs485.py       # RS485 communication test
 ├── scripts/
 │   └── setup_pi.sh         # Raspberry Pi setup script
@@ -363,6 +403,7 @@ DMX_BREAK_TIME_US = 200  # Increase if needed (min 92 μs, max ~1000 μs)
 - ✅ Discover and control patterns via Channel 2 (all 256 static & dynamic patterns documented!)
 - ✅ Document color, position, zoom, and speed effects
 - ✅ Create galvo calibration tool for improved line straightness
+- ✅ Add hazer/smoke generator control for atmospheric effects
 - 🎯 Attempt to create custom shapes or logo patterns (experimental)
 
 **See [docs/pattern_reference.md](docs/pattern_reference.md) for complete pattern documentation!**
