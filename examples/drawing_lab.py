@@ -74,7 +74,7 @@ DEFAULT_PRESETS = {
         "Two Eyes": {
             "description": "Two eyes - L1=circle, L2=flapping bird animation",
             "scan_speed": 5,
-            "dynamic_speed": 1,
+            "dynamic_speed": 5,
             "laser1": {
                 "mode": "STATIC_PATTERN",
                 "pattern": 1,  # Circle
@@ -760,6 +760,7 @@ def mode_dual_laser():
             laser.set_color(255)
             laser.set_color_segment(0)
             laser.set_scanning_speed(255)
+            laser.set_dynamic_speed(255)
             laser.center()
         time.sleep(0.3)
 
@@ -775,7 +776,8 @@ def mode_dual_laser():
         print("  l2p/l2x/l2y/l2z [val]   Laser 2 manual")
         print("  l1mode/l2mode [static/dynamic]   Set laser mode")
         print("  ss [val]      Set scan speed (both lasers)")
-        print("  q             Quit\n"
+        print("  ds [val]      Set dynamic speed (both lasers)")
+        print("  q             Quit\n")
 
         while True:
             try:
@@ -796,8 +798,8 @@ def mode_dual_laser():
                     laser2.set_mode(MK2Mode.DYNAMIC_PATTERN)
                     laser1.set_scanning_speed(5)
                     laser2.set_scanning_speed(5)
-                    laser1.set_dynamic_speed(1)
-                    laser2.set_dynamic_speed(1)
+                    laser1.set_dynamic_speed(5)
+                    laser2.set_dynamic_speed(5)
                 
                 laser1.set_pattern(pat1)
                 laser1.set_position(x1, y1)
@@ -809,7 +811,7 @@ def mode_dual_laser():
                 print(f"  L1: pat={pat1} pos=({x1},{y1}) zoom={z1}")
                 print(f"  L2: pat={pat2} pos=({x2},{y2}) zoom={z2}")
                 if cmd == '7':
-                    print(f"  Both: scan_speed=5, dynamic_speed=1")
+                    print(f"  Both: scan_speed=5, dynamic_speed=5")
             elif cmd.startswith('load '):
                 preset_name = cmd[5:].strip()
                 if preset_name:
@@ -870,6 +872,14 @@ def mode_dual_laser():
                     print(f"Scan speed: {val} (both lasers)")
                 except (ValueError, IndexError):
                     print("Usage: ss [0-255]")
+            elif cmd.startswith('ds '):
+                try:
+                    val = int(cmd.split()[1])
+                    laser1.set_dynamic_speed(val)
+                    laser2.set_dynamic_speed(val)
+                    print(f"Dynamic speed: {val} (both lasers)")
+                except (ValueError, IndexError):
+                    print("Usage: ds [0-255]")
             elif cmd == 'l1mode static':
                 laser1.set_mode(MK2Mode.STATIC_PATTERN)
                 print("L1: STATIC_PATTERN")
