@@ -59,36 +59,61 @@ PRESETS_FILE = os.path.join(os.path.dirname(__file__), 'visual_presets.json')
 
 # Default presets (saved on first run)
 DEFAULT_PRESETS = {
-    "Two Eyes": {
-        "description": "Two circles/triangles alternating - looks like blinking eyes",
-        "hold_ms": 35,
-        "scan_speed": 5,
-        "dynamic_speed": 1,
-        "zoom": 255,
-        "laser1": {
-            "mode": "STATIC_PATTERN",
-            "pattern": 1,  # Circle (or 120 for triangle, 225 for spirals)
-        },
-        "laser2": {
-            "mode": "DYNAMIC_PATTERN",
-            "pattern": 235,  # Flapping bird (smile to frown)
+    "mode2": {  # MCU Rate Finder presets
+        "Fast Circle": {
+            "description": "Fast alternating circle",
+            "hold_ms": 35,
+            "scan_speed": 5,
+            "dynamic_speed": 1,
+            "zoom": 255,
+            "laser_mode": "STATIC_PATTERN",
+            "pattern": 1,
+        }
+    },
+    "mode4": {  # Dual Laser presets
+        "Two Eyes": {
+            "description": "Two eyes - L1=circle, L2=flapping bird animation",
+            "scan_speed": 5,
+            "dynamic_speed": 1,
+            "laser1": {
+                "mode": "STATIC_PATTERN",
+                "pattern": 1,  # Circle
+                "x": 90,
+                "y": 128,
+                "zoom": 255,
+            },
+            "laser2": {
+                "mode": "DYNAMIC_PATTERN",
+                "pattern": 235,  # Flapping bird
+                "x": 170,
+                "y": 128,
+                "zoom": 255,
+            }
         }
     }
 }
 
-def load_presets():
-    """Load visual presets from JSON file."""
+def load_presets(mode=None):
+    """Load visual presets from JSON file.
+    
+    Args:
+        mode: Optional mode filter (e.g., 'mode2', 'mode4')
+    """
     if os.path.exists(PRESETS_FILE):
         try:
             with open(PRESETS_FILE, 'r') as f:
-                return json.load(f)
+                all_presets = json.load(f)
         except Exception as e:
             print(f"Warning: Could not load presets: {e}")
-            return DEFAULT_PRESETS.copy()
+            all_presets = DEFAULT_PRESETS.copy()
     else:
         # First run - save defaults
         save_presets(DEFAULT_PRESETS)
-        return DEFAULT_PRESETS.copy()
+        all_presets = DEFAULT_PRESETS.copy()
+    
+    if mode:
+        return all_presets.get(mode, {})
+    return all_presets
 
 def save_presets(presets):
     """Save visual presets to JSON file."""
@@ -359,7 +384,7 @@ def mode_rate_finder():
             elif cmd.startswith('load '):
                 preset_name = cmd[5:].strip()
                 if preset_name:
-                    presets = load_presets()
+                    presets = load_presets('mode2')
                     if preset_name in presets:
                         preset = presets[preset_name]
                         # Apply preset settings
@@ -387,9 +412,9 @@ def mode_rate_finder():
                 else:
                     print("Usage: load [preset_name]")
             elif cmd == 'list':
-                presets = load_presets()
+                presets = load_presets('mode2')
                 if presets:
-                    print("\nAvailable presets:")
+                    print("\nAvailable Mode 2 presets:")
                     for name, data in presets.items():
                         desc = data.get('description', 'No description')
                         mode = data.get('laser_mode', 'STATIC_PATTERN')
@@ -402,9 +427,11 @@ def mode_rate_finder():
             elif cmd.startswith('save '):
                 preset_name = cmd[5:].strip()
                 if preset_name:
-                    presets = load_presets()
+                    all_presets = load_presets()
+                    if 'mode2' not in all_presets:
+                        all_presets['mode2'] = {}
                     mode_name = "STATIC_PATTERN" if state['laser_mode'] == MK2Mode.STATIC_PATTERN else "DYNAMIC_PATTERN"
-                    presets[preset_name] = {
+                    all_presets['mode2'][preset_name] = {
                         "description": "User-saved preset",
                         "hold_ms": state['hold_ms'],
                         "scan_speed": state['scan_speed'],
@@ -413,7 +440,7 @@ def mode_rate_finder():
                         "laser_mode": mode_name,
                         "pattern": state['pattern'],
                     }
-                    save_presets(presets)
+                    save_presets(all_presets)
                     print(f"✓ Saved preset '{preset_name}'")
                 else:
                     print("Usage: save [preset_name]")
@@ -719,6 +746,9 @@ def mode_dual_laser():
         '6': ("|| parallel",
               (70, 100, 128, 60),
               (70, 160, 128, 60)),
+        '7': ("Two Eyes",
+              (1, 90, 128, 255),   # L1: Circle (left eye)
+              (235, 170, 128, 255)),  # L2: Dynamic pattern 235 (right eye)
     }
 
     try:
@@ -734,13 +764,18 @@ def mode_dual_laser():
         time.sleep(0.3)
 
         print("✓ Both lasers ready!")
-        print("\nPresets:")
+        print("\nBuilt-in Presets:")
         for k, (name, _, _) in DUAL_PRESETS.items():
             print(f"  {k} - {name}")
-        print("\nManual control:")
-        print("  l1p/l1x/l1y/l1z [val]   Laser 1")
-        print("  l2p/l2x/l2y/l2z [val]   Laser 2")
-        print("  q - Quit\n")
+        print("\nCommands:")
+        print("  load [name]   Load saved dual-laser preset")
+        print("  list          List all saved presets")
+        print("  save [name]   Save current config as preset")
+        print("  l1p/l1x/l1y/l1z [val]   Laser 1 manual")
+        print("  l2p/l2x/l2y/l2z [val]   Laser 2 manual")
+        print("  l1mode/l2mode [static/dynamic]   Set laser mode")
+        print("  ss [val]      Set scan speed (both lasers)")
+        print("  q             Quit\n"
 
         while True:
             try:
@@ -754,6 +789,16 @@ def mode_dual_laser():
                 name, l1_cfg, l2_cfg = DUAL_PRESETS[cmd]
                 pat1, x1, y1, z1 = l1_cfg
                 pat2, x2, y2, z2 = l2_cfg
+                
+                # Handle special case for Two Eyes (preset 7)
+                if cmd == '7':
+                    laser1.set_mode(MK2Mode.STATIC_PATTERN)
+                    laser2.set_mode(MK2Mode.DYNAMIC_PATTERN)
+                    laser1.set_scanning_speed(5)
+                    laser2.set_scanning_speed(5)
+                    laser1.set_dynamic_speed(1)
+                    laser2.set_dynamic_speed(1)
+                
                 laser1.set_pattern(pat1)
                 laser1.set_position(x1, y1)
                 laser1.set_zoom(z1)
@@ -763,6 +808,117 @@ def mode_dual_laser():
                 print(f"Preset: {name}")
                 print(f"  L1: pat={pat1} pos=({x1},{y1}) zoom={z1}")
                 print(f"  L2: pat={pat2} pos=({x2},{y2}) zoom={z2}")
+                if cmd == '7':
+                    print(f"  Both: scan_speed=5, dynamic_speed=1")
+            elif cmd.startswith('load '):
+                preset_name = cmd[5:].strip()
+                if preset_name:
+                    presets = load_presets('mode4')
+                    if preset_name in presets:
+                        preset = presets[preset_name]
+                        l1 = preset.get('laser1', {})
+                        l2 = preset.get('laser2', {})
+                        
+                        # Apply L1 settings
+                        if l1.get('mode') == 'DYNAMIC_PATTERN':
+                            laser1.set_mode(MK2Mode.DYNAMIC_PATTERN)
+                        else:
+                            laser1.set_mode(MK2Mode.STATIC_PATTERN)
+                        laser1.set_pattern(l1.get('pattern', 0))
+                        laser1.set_position(l1.get('x', 128), l1.get('y', 128))
+                        laser1.set_zoom(l1.get('zoom', 60))
+                        
+                        # Apply L2 settings
+                        if l2.get('mode') == 'DYNAMIC_PATTERN':
+                            laser2.set_mode(MK2Mode.DYNAMIC_PATTERN)
+                        else:
+                            laser2.set_mode(MK2Mode.STATIC_PATTERN)
+                        laser2.set_pattern(l2.get('pattern', 0))
+                        laser2.set_position(l2.get('x', 128), l2.get('y', 128))
+                        laser2.set_zoom(l2.get('zoom', 60))
+                        
+                        # Apply global settings
+                        ss = preset.get('scan_speed', 255)
+                        laser1.set_scanning_speed(ss)
+                        laser2.set_scanning_speed(ss)
+                        ds = preset.get('dynamic_speed', 255)
+                        laser1.set_dynamic_speed(ds)
+                        laser2.set_dynamic_speed(ds)
+                        
+                        print(f"✓ Loaded preset '{preset_name}'")
+                        print(f"  {preset.get('description', '')}")
+                    else:
+                        print(f"❌ Preset '{preset_name}' not found. Use 'list' to see available presets.")
+                else:
+                    print("Usage: load [preset_name]")
+            elif cmd == 'list':
+                presets = load_presets('mode4')
+                if presets:
+                    print("\nAvailable Mode 4 (Dual Laser) presets:")
+                    for name, data in presets.items():
+                        desc = data.get('description', 'No description')
+                        print(f"  • {name}")
+                        print(f"    {desc}")
+                    print()
+                else:
+                    print("No dual-laser presets saved yet.")
+            elif cmd.startswith('ss '):
+                try:
+                    val = int(cmd.split()[1])
+                    laser1.set_scanning_speed(val)
+                    laser2.set_scanning_speed(val)
+                    print(f"Scan speed: {val} (both lasers)")
+                except (ValueError, IndexError):
+                    print("Usage: ss [0-255]")
+            elif cmd == 'l1mode static':
+                laser1.set_mode(MK2Mode.STATIC_PATTERN)
+                print("L1: STATIC_PATTERN")
+            elif cmd == 'l1mode dynamic':
+                laser1.set_mode(MK2Mode.DYNAMIC_PATTERN)
+                print("L1: DYNAMIC_PATTERN")
+            elif cmd == 'l2mode static':
+                laser2.set_mode(MK2Mode.STATIC_PATTERN)
+                print("L2: STATIC_PATTERN")
+            elif cmd == 'l2mode dynamic':
+                laser2.set_mode(MK2Mode.DYNAMIC_PATTERN)
+                print("L2: DYNAMIC_PATTERN")
+            elif cmd.startswith('save '):
+                preset_name = cmd[5:].strip()
+                if preset_name:
+                    all_presets = load_presets()
+                    if 'mode4' not in all_presets:
+                        all_presets['mode4'] = {}
+                    
+                    # Get current state of both lasers
+                    l1_state = laser1.get_state()
+                    l2_state = laser2.get_state()
+                    
+                    l1_mode = "DYNAMIC_PATTERN" if l1_state['mode'] == MK2Mode.DYNAMIC_PATTERN.value else "STATIC_PATTERN"
+                    l2_mode = "DYNAMIC_PATTERN" if l2_state['mode'] == MK2Mode.DYNAMIC_PATTERN.value else "STATIC_PATTERN"
+                    
+                    all_presets['mode4'][preset_name] = {
+                        "description": "User-saved dual laser preset",
+                        "scan_speed": l1_state.get('scanning_speed', 255),
+                        "dynamic_speed": l1_state.get('dynamic_speed', 255),
+                        "laser1": {
+                            "mode": l1_mode,
+                            "pattern": l1_state.get('pattern', 0),
+                            "x": l1_state.get('x_position', 128),
+                            "y": l1_state.get('y_position', 128),
+                            "zoom": l1_state.get('zoom', 60),
+                        },
+                        "laser2": {
+                            "mode": l2_mode,
+                            "pattern": l2_state.get('pattern', 0),
+                            "x": l2_state.get('x_position', 128),
+                            "y": l2_state.get('y_position', 128),
+                            "zoom": l2_state.get('zoom', 60),
+                        }
+                    }
+                    save_presets(all_presets)
+                    print(f"✓ Saved dual-laser preset '{preset_name}'")
+                else:
+                    print("Usage: save [preset_name]")
             else:
                 parts = cmd.split()
                 if len(parts) == 2:
