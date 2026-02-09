@@ -72,20 +72,23 @@ DEFAULT_PRESETS = {
     },
     "mode4": {  # Dual Laser presets
         "Two Eyes": {
-            "description": "Two eyes - L1=circle, L2=flapping bird animation",
+            "description": "Two eyes - L1 alternates positions (2 circles), L2=flapping bird",
             "scan_speed": 5,
             "dynamic_speed": 5,
             "laser1": {
                 "mode": "STATIC_PATTERN",
                 "pattern": 1,  # Circle
-                "x": 90,
-                "y": 128,
                 "zoom": 255,
+                "toggle": [
+                    {"x": 60, "y": 128},
+                    {"x": 200, "y": 128}
+                ],
+                "hold_ms": 35,
             },
             "laser2": {
                 "mode": "DYNAMIC_PATTERN",
                 "pattern": 235,  # Flapping bird
-                "x": 170,
+                "x": 128,
                 "y": 128,
                 "zoom": 255,
             }
@@ -746,10 +749,28 @@ def mode_dual_laser():
         '6': ("|| parallel",
               (70, 100, 128, 60),
               (70, 160, 128, 60)),
-        '7': ("Two Eyes",
-              (1, 90, 128, 255),   # L1: Circle (left eye)
-              (235, 170, 128, 255)),  # L2: Dynamic pattern 235 (right eye)
     }
+
+    # Toggle state for position-alternating on Laser 1
+    toggle_state = {
+        'active': False,
+        'running': True,
+        'positions': [{'x': 60, 'y': 128}, {'x': 200, 'y': 128}],
+        'hold_ms': 35.0,
+    }
+
+    def toggle_loop():
+        """Alternate Laser 1 between positions to create multiple shapes via POV."""
+        while toggle_state['running']:
+            if not toggle_state['active']:
+                time.sleep(0.05)
+                continue
+            hold = toggle_state['hold_ms'] / 1000.0
+            for pos in toggle_state['positions']:
+                if not toggle_state['active'] or not toggle_state['running']:
+                    break
+                laser1.set_position(pos['x'], pos['y'])
+                time.sleep(hold)
 
     try:
         driver.start(universe)
@@ -769,7 +790,7 @@ def mode_dual_laser():
         for k, (name, _, _) in DUAL_PRESETS.items():
             print(f"  {k} - {name}")
         print("\nCommands:")
-        print("  load [name]   Load saved dual-laser preset")
+        print("  load [name]   Load saved dual-laser preset (e.g. 'load Two Eyes')")
         print("  list          List all saved presets")
         print("  save [name]   Save current config as preset")
         print("  l1p/l1x/l1y/l1z [val]   Laser 1 manual")
@@ -777,7 +798,12 @@ def mode_dual_laser():
         print("  l1mode/l2mode [static/dynamic]   Set laser mode")
         print("  ss [val]      Set scan speed (both lasers)")
         print("  ds [val]      Set dynamic speed (both lasers)")
+        print("  toggle        Start/stop L1 position alternating")
+        print("  hold [ms]     Set toggle hold time (default 35ms)")
         print("  q             Quit\n")
+
+        toggle_thread = threading.Thread(target=toggle_loop, daemon=True)
+        toggle_thread.start()
 
         while True:
             try:
@@ -788,18 +814,10 @@ def mode_dual_laser():
             if cmd == 'q':
                 break
             elif cmd in DUAL_PRESETS:
+                toggle_state['active'] = False  # Stop toggle when switching presets
                 name, l1_cfg, l2_cfg = DUAL_PRESETS[cmd]
                 pat1, x1, y1, z1 = l1_cfg
                 pat2, x2, y2, z2 = l2_cfg
-                
-                # Handle special case for Two Eyes (preset 7)
-                if cmd == '7':
-                    laser1.set_mode(MK2Mode.STATIC_PATTERN)
-                    laser2.set_mode(MK2Mode.DYNAMIC_PATTERN)
-                    laser1.set_scanning_speed(5)
-                    laser2.set_scanning_speed(5)
-                    laser1.set_dynamic_speed(5)
-                    laser2.set_dynamic_speed(5)
                 
                 laser1.set_pattern(pat1)
                 laser1.set_position(x1, y1)
@@ -810,8 +828,22 @@ def mode_dual_laser():
                 print(f"Preset: {name}")
                 print(f"  L1: pat={pat1} pos=({x1},{y1}) zoom={z1}")
                 print(f"  L2: pat={pat2} pos=({x2},{y2}) zoom={z2}")
-                if cmd == '7':
-                    print(f"  Both: scan_speed=5, dynamic_speed=5")
+            elif cmd == 'toggle':
+                toggle_state['active'] = not toggle_state['active']
+                if toggle_state['active']:
+                    n = len(toggle_state['positions'])
+                    print(f"Toggle ON: L1 alternating {n} positions at {toggle_state['hold_ms']:.0f}ms")
+                    for i, pos in enumerate(toggle_state['positions']):
+                        print(f"  Pos {i+1}: x={pos['x']}, y={pos['y']}")
+                else:
+                    print("Toggle OFF: L1 position fixed")
+            elif cmd.startswith('hold '):
+                try:
+                    val = float(cmd.split()[1])
+                    toggle_state['hold_ms'] = max(5, min(200, val))
+                    print(f"Toggle hold: {toggle_state['hold_ms']:.0f}ms")
+                except (ValueError, IndexError):
+                    print("Usage: hold [ms]")
             elif cmd.startswith('load '):
                 preset_name = cmd[5:].strip()
                 if preset_name:
@@ -827,8 +859,17 @@ def mode_dual_laser():
                         else:
                             laser1.set_mode(MK2Mode.STATIC_PATTERN)
                         laser1.set_pattern(l1.get('pattern', 0))
-                        laser1.set_position(l1.get('x', 128), l1.get('y', 128))
                         laser1.set_zoom(l1.get('zoom', 60))
+                        
+                        # Check if L1 has toggle positions
+                        if 'toggle' in l1 and l1['toggle']:
+                            toggle_state['positions'] = l1['toggle']
+                            toggle_state['hold_ms'] = l1.get('hold_ms', 35.0)
+                            toggle_state['active'] = True
+                            print(f"  L1 toggle: {len(l1['toggle'])} positions at {toggle_state['hold_ms']:.0f}ms")
+                        else:
+                            toggle_state['active'] = False
+                            laser1.set_position(l1.get('x', 128), l1.get('y', 128))
                         
                         # Apply L2 settings
                         if l2.get('mode') == 'DYNAMIC_PATTERN':
@@ -953,6 +994,9 @@ def mode_dual_laser():
     except KeyboardInterrupt:
         print("\nInterrupted")
     finally:
+        toggle_state['running'] = False
+        toggle_state['active'] = False
+        time.sleep(0.05)
         laser1.off()
         laser2.off()
         time.sleep(0.3)
