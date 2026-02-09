@@ -127,6 +127,14 @@ def save_presets(presets):
     except Exception as e:
         print(f"Error saving presets: {e}")
 
+def find_preset(presets, name):
+    """Case-insensitive preset lookup. Returns (actual_key, preset_data) or (None, None)."""
+    name_lower = name.lower()
+    for key, data in presets.items():
+        if key.lower() == name_lower:
+            return key, data
+    return None, None
+
 
 # ──────────────────────────────────────────────────────
 #  MODE 1: PEN FINDER
@@ -388,8 +396,8 @@ def mode_rate_finder():
                 preset_name = cmd[5:].strip()
                 if preset_name:
                     presets = load_presets('mode2')
-                    if preset_name in presets:
-                        preset = presets[preset_name]
+                    actual_name, preset = find_preset(presets, preset_name)
+                    if preset:
                         # Apply preset settings
                         state['hold_ms'] = preset.get('hold_ms', 35.0)
                         state['scan_speed'] = preset.get('scan_speed', 5)
@@ -406,7 +414,7 @@ def mode_rate_finder():
                         
                         apply_settings()
                         mode_name = "STATIC" if state['laser_mode'] == MK2Mode.STATIC_PATTERN else "DYNAMIC"
-                        print(f"✓ Loaded preset '{preset_name}'")
+                        print(f"✓ Loaded preset '{actual_name}'")
                         print(f"  {preset.get('description', '')}")
                         print(f"  Mode: {mode_name}  Pattern: {state['pattern']}  Zoom: {state['zoom']}")
                         print(f"  Scan: {state['scan_speed']}  DynSpeed: {state['dyn_speed']}  Hold: {state['hold_ms']:.0f}ms")
@@ -848,8 +856,8 @@ def mode_dual_laser():
                 preset_name = cmd[5:].strip()
                 if preset_name:
                     presets = load_presets('mode4')
-                    if preset_name in presets:
-                        preset = presets[preset_name]
+                    actual_name, preset = find_preset(presets, preset_name)
+                    if preset:
                         l1 = preset.get('laser1', {})
                         l2 = preset.get('laser2', {})
                         
@@ -888,7 +896,7 @@ def mode_dual_laser():
                         laser1.set_dynamic_speed(ds)
                         laser2.set_dynamic_speed(ds)
                         
-                        print(f"✓ Loaded preset '{preset_name}'")
+                        print(f"✓ Loaded preset '{actual_name}'")
                         print(f"  {preset.get('description', '')}")
                     else:
                         print(f"❌ Preset '{preset_name}' not found. Use 'list' to see available presets.")
