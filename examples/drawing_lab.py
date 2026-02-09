@@ -167,7 +167,18 @@ def mode_rate_finder():
         'running': True,
         'hold_ms': 50.0,     # Start slow (50ms = 20Hz total, 10Hz per state)
         'mode': 'position',  # 'position' or 'pattern'
+        'pattern': 145,      # Cross-dashed (fast shape)
+        'zoom': 255,         # Max zoom
+        'scan_speed': 1,     # Slowest scan = sharpest
+        'dyn_speed': 255,    # Max pattern/dynamic speed
     }
+
+    def apply_settings():
+        """Apply current pattern/zoom/speed settings to the laser."""
+        laser.set_pattern(state['pattern'])
+        laser.set_zoom(state['zoom'])
+        laser.set_scanning_speed(state['scan_speed'])
+        laser.set_dynamic_speed(state['dyn_speed'])
 
     def toggle_loop():
         """Alternate between two states at the configured rate."""
@@ -194,12 +205,13 @@ def mode_rate_finder():
         time.sleep(0.5)
 
         laser.set_mode(MK2Mode.STATIC_PATTERN)
-        laser.set_pattern(0)  # Dot
-        laser.set_zoom(30)
+        laser.set_pattern(state['pattern'])
+        laser.set_zoom(state['zoom'])
         laser.center()
         laser.set_color(255)
         laser.set_color_segment(0)
-        laser.set_scanning_speed(255)
+        laser.set_scanning_speed(state['scan_speed'])
+        laser.set_dynamic_speed(state['dyn_speed'])
         time.sleep(0.3)
 
         print("✓ Laser ready!")
@@ -208,11 +220,17 @@ def mode_rate_finder():
         print("  faster    Decrease hold time (press repeatedly)")
         print("  slower    Increase hold time")
         print("  [number]  Set hold time in ms directly (e.g. '25')")
-        print("  pos       Toggle position mode (left↔right dot)")
+        print("  pos       Toggle position mode (left↔right)")
         print("  pat       Toggle pattern mode (h-line↔v-line)")
+        print("  p [n]     Set pattern number (e.g. 'p 145')")
+        print("  z [n]     Set zoom 0-255 (e.g. 'z 255')")
+        print("  ss [n]    Set scan speed 0-255 (e.g. 'ss 1')")
+        print("  ds [n]    Set dynamic speed 0-255 (e.g. 'ds 255')")
         print("  q         Quit")
         print()
-        print("Start: Do you see TWO dots alternating?")
+        print(f"Pattern: {state['pattern']}  Zoom: {state['zoom']}  "
+              f"Scan: {state['scan_speed']}  DynSpeed: {state['dyn_speed']}")
+        print("Start: Do you see TWO shapes alternating?")
         print(f"Hold time: {state['hold_ms']:.0f}ms per state "
               f"({1000/state['hold_ms']/2:.0f} full cycles/sec)\n")
 
@@ -233,14 +251,46 @@ def mode_rate_finder():
                 state['hold_ms'] = min(200, state['hold_ms'] + 5)
             elif cmd == 'pos':
                 state['mode'] = 'position'
-                laser.set_pattern(0)
-                laser.set_zoom(30)
-                print("Mode: position (left↔right dot)")
+                apply_settings()
+                print(f"Mode: position (left↔right, pat {state['pattern']} "
+                      f"zoom {state['zoom']} scan {state['scan_speed']})")
             elif cmd == 'pat':
                 state['mode'] = 'pattern'
                 laser.center()
                 laser.set_zoom(80)
                 print("Mode: pattern (h-line↔v-line)")
+            elif cmd.startswith('p ') and not cmd.startswith('pa'):
+                try:
+                    val = int(cmd.split()[1])
+                    state['pattern'] = max(0, min(255, val))
+                    apply_settings()
+                    print(f"Pattern: {state['pattern']}")
+                except (ValueError, IndexError):
+                    print("Usage: p [0-255]")
+            elif cmd.startswith('z '):
+                try:
+                    val = int(cmd.split()[1])
+                    state['zoom'] = max(0, min(255, val))
+                    apply_settings()
+                    print(f"Zoom: {state['zoom']}")
+                except (ValueError, IndexError):
+                    print("Usage: z [0-255]")
+            elif cmd.startswith('ss '):
+                try:
+                    val = int(cmd.split()[1])
+                    state['scan_speed'] = max(0, min(255, val))
+                    apply_settings()
+                    print(f"Scan speed: {state['scan_speed']}")
+                except (ValueError, IndexError):
+                    print("Usage: ss [0-255]")
+            elif cmd.startswith('ds '):
+                try:
+                    val = int(cmd.split()[1])
+                    state['dyn_speed'] = max(0, min(255, val))
+                    apply_settings()
+                    print(f"Dynamic speed: {state['dyn_speed']}")
+                except (ValueError, IndexError):
+                    print("Usage: ds [0-255]")
             else:
                 try:
                     val = float(cmd)
