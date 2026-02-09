@@ -2,30 +2,36 @@
 """
 Drawing Lab - Experimental approaches for precise laser drawing
 
-Tests multiple techniques to push the MK2 beyond its intended DMX capabilities:
+The MK2 uses an STC 89C516RD+ (8051) MCU that processes DMX at ~25-40Hz.
+Sending faster than that just means it picks up random intermediate states.
+All modes in this lab are designed around that constraint.
 
   Mode 1: PEN FINDER
-    Compare all potentially-small patterns at various zoom levels to find
-    the absolute smallest dot. Cycles through candidates automatically.
+    Compare all small patterns at various zoom levels to find the
+    absolute smallest dot.
 
-  Mode 2: LINE COMPOSER
-    Use horizontal/vertical LINE patterns (60, 70) as wide brushes.
-    The MK2's internal scanner draws the line at kHz speed (persistent).
-    We just reposition the line via DMX at 40Hz to compose shapes.
-    Example: 4 horizontal lines + 2 vertical lines = rectangle.
+  Mode 2: MCU RATE FINDER
+    Discover the MK2's actual DMX processing rate by toggling between
+    two visible states and finding the fastest rate where both appear.
 
-  Mode 3: FAST DMX COMPOSER
-    Same as Mode 2, but bypasses the 40Hz DMX limiter.
-    With only 22 channels, each DMX frame takes ~1.2ms, so we can
-    potentially send 200-800 frames/sec. More segments = more shape.
+  Mode 3: LINE COMPOSER (synced)
+    Compose shapes from line segments, synced to the MCU's processing
+    rate. Each segment is held long enough for the MCU to display it.
 
-  Mode 4: PATTERN STROBE
-    Start a full pattern, then rapidly toggle color 0/255 to see if
-    we can "slice" or interrupt the internal scan to create partials.
+  Mode 4: DUAL LASER
+    Both lasers simultaneously - one draws H-lines, the other V-lines.
+    No time-sharing, no flicker. Perfect for 2-segment shapes.
 
-  Mode 5: DUAL LASER
-    Both lasers simultaneously - one draws horizontal segments, the
-    other draws vertical. No time-sharing needed = solid lines.
+  Mode 5: DUAL + COMPOSE
+    Both lasers show persistent elements, PLUS time-share additional
+    segments. 2 solid + N flickering = more complex shapes.
+
+  Mode 6: PATTERN STROBE
+    Rapid color/mode toggling to test pattern interruption.
+
+  Mode 7: GALVO SIGNAL PROBE
+    For hardware hacking: identifies galvo driver signals when you
+    have the laser open. Steps through known positions for probing.
 
 Run:  python drawing_lab.py [mode]
 """
@@ -49,7 +55,6 @@ from laserpi.config import (
 #  MODE 1: PEN FINDER
 # ──────────────────────────────────────────────────────
 
-# Patterns that might be small at zoom=0
 PEN_CANDIDATES = [
     (0,   "Octagon (default dot)"),
     (5,   "Wiggly octagon"),
@@ -60,8 +65,8 @@ PEN_CANDIDATES = [
     (60,  "H-line static"),
     (70,  "V-line static"),
     (80,  "Diagonal line"),
-    (120, "Triangle ▽"),
-    (130, "Triangle △"),
+    (120, "Triangle"),
+    (130, "Triangle"),
     (140, "Cross +"),
     (150, "Square"),
     (200, "Pentagon"),
@@ -73,9 +78,8 @@ def mode_pen_finder():
     print("\n" + "=" * 60)
     print("MODE 1: PEN FINDER")
     print("=" * 60)
-    print("Cycles through small patterns at zoom 0, 10, 30, 50")
-    print("Watch the laser and note which pattern gives the smallest dot.")
-    print("Press Enter to advance, 'q' to quit.\n")
+    print("Cycles through patterns at zoom 0, 10, 30, 50, 128")
+    print("Press Enter=next, s=star, q=quit\n")
 
     universe = DMXUniverse()
     driver = DMXDriver()
@@ -92,6 +96,7 @@ def mode_pen_finder():
         laser.set_scanning_speed(255)
         time.sleep(0.3)
 
+        starred = []
         zooms = [0, 10, 30, 50, 128]
 
         for zoom in zooms:
@@ -102,13 +107,21 @@ def mode_pen_finder():
             for pat_num, pat_name in PEN_CANDIDATES:
                 laser.set_pattern(pat_num)
                 time.sleep(0.1)
-                result = input(f"  Pattern {pat_num:3d}: {pat_name:25s}  [Enter=next, s=star, q=quit] ")
+                result = input(f"  Pattern {pat_num:3d}: {pat_name:25s}  ")
                 if result.lower() == 'q':
+                    if starred:
+                        print("\n★ Starred patterns:")
+                        for p, z in starred:
+                            print(f"    Pattern {p} @ zoom {z}")
                     return
                 if result.lower() == 's':
+                    starred.append((pat_num, zoom))
                     print(f"    ★ Starred: pattern {pat_num} at zoom {zoom}")
 
-        print("\nDone! Note your starred patterns for use in other modes.")
+        if starred:
+            print("\n★ Starred patterns:")
+            for p, z in starred:
+                print(f"    Pattern {p} @ zoom {z}")
 
     except KeyboardInterrupt:
         print("\nInterrupted")
@@ -119,24 +132,160 @@ def mode_pen_finder():
 
 
 # ──────────────────────────────────────────────────────
-#  MODE 2: LINE COMPOSER
+#  MODE 2: MCU RATE FINDER
 # ──────────────────────────────────────────────────────
 
-# Define shapes as lists of line segments: (pattern, x, y, zoom)
-# Pattern 60 = horizontal line, 70 = vertical line, 80 = diagonal
-# Each segment is positioned at specific X/Y and displayed for 1 DMX frame
+def mode_rate_finder():
+    """
+    Discover the MK2's actual DMX processing rate.
+    
+    Method: Alternate between two clearly different states (left dot / right dot)
+    at varying rates. If you see BOTH dots, the rate is slow enough for the MCU
+    to process both states. If you see only one (or random), it's too fast.
+    
+    The fastest rate where you reliably see both states = the MCU's update rate.
+    """
+    print("\n" + "=" * 60)
+    print("MODE 2: MCU RATE FINDER")
+    print("=" * 60)
+    print()
+    print("Alternates the laser between LEFT and RIGHT positions.")
+    print("At the right speed, you should see TWO dots (persistence")
+    print("of vision). Too fast = MCU misses updates, you see random.")
+    print()
+    print("This tells us the MCU's actual DMX processing rate.\n")
 
-# Simple rectangle from 4 line segments
+    universe = DMXUniverse()
+    driver = DMXDriver()
+    laser = MK2(universe, LASER1_ADDRESS, name="Laser 1")
+
+    # Two clearly different states
+    STATE_A = {'x': 60,  'y': 128}   # Left
+    STATE_B = {'x': 200, 'y': 128}   # Right
+
+    state = {
+        'running': True,
+        'hold_ms': 50.0,     # Start slow (50ms = 20Hz total, 10Hz per state)
+        'mode': 'position',  # 'position' or 'pattern'
+    }
+
+    def toggle_loop():
+        """Alternate between two states at the configured rate."""
+        while state['running']:
+            hold = state['hold_ms'] / 1000.0
+
+            if state['mode'] == 'position':
+                # State A: left
+                laser.set_position(STATE_A['x'], STATE_A['y'])
+                time.sleep(hold)
+                # State B: right
+                laser.set_position(STATE_B['x'], STATE_B['y'])
+                time.sleep(hold)
+            elif state['mode'] == 'pattern':
+                # State A: horizontal line
+                laser.set_pattern(60)
+                time.sleep(hold)
+                # State B: vertical line
+                laser.set_pattern(70)
+                time.sleep(hold)
+
+    try:
+        driver.start(universe)
+        time.sleep(0.5)
+
+        laser.set_mode(MK2Mode.STATIC_PATTERN)
+        laser.set_pattern(0)  # Dot
+        laser.set_zoom(30)
+        laser.center()
+        laser.set_color(255)
+        laser.set_color_segment(0)
+        laser.set_scanning_speed(255)
+        time.sleep(0.3)
+
+        print("✓ Laser ready!")
+        print()
+        print("Controls:")
+        print("  faster    Decrease hold time (press repeatedly)")
+        print("  slower    Increase hold time")
+        print("  [number]  Set hold time in ms directly (e.g. '25')")
+        print("  pos       Toggle position mode (left↔right dot)")
+        print("  pat       Toggle pattern mode (h-line↔v-line)")
+        print("  q         Quit")
+        print()
+        print("Start: Do you see TWO dots alternating?")
+        print(f"Hold time: {state['hold_ms']:.0f}ms per state "
+              f"({1000/state['hold_ms']/2:.0f} full cycles/sec)\n")
+
+        thread = threading.Thread(target=toggle_loop, daemon=True)
+        thread.start()
+
+        while True:
+            try:
+                cmd = input("> ").strip().lower()
+            except EOFError:
+                break
+
+            if cmd == 'q':
+                break
+            elif cmd == 'faster':
+                state['hold_ms'] = max(2, state['hold_ms'] - 5)
+            elif cmd == 'slower':
+                state['hold_ms'] = min(200, state['hold_ms'] + 5)
+            elif cmd == 'pos':
+                state['mode'] = 'position'
+                laser.set_pattern(0)
+                laser.set_zoom(30)
+                print("Mode: position (left↔right dot)")
+            elif cmd == 'pat':
+                state['mode'] = 'pattern'
+                laser.center()
+                laser.set_zoom(80)
+                print("Mode: pattern (h-line↔v-line)")
+            else:
+                try:
+                    val = float(cmd)
+                    state['hold_ms'] = max(2, min(200, val))
+                except ValueError:
+                    continue
+
+            hz = 1000 / state['hold_ms'] / 2
+            print(f"Hold: {state['hold_ms']:.0f}ms  ({hz:.0f} full cycles/sec, "
+                  f"MCU needs {state['hold_ms']:.0f}ms to process each state)")
+
+        state['running'] = False
+        time.sleep(0.05)
+
+        # Report findings
+        print(f"\n{'='*60}")
+        print(f"RESULT: Last working hold time = {state['hold_ms']:.0f}ms")
+        print(f"MCU processing rate: ~{1000/state['hold_ms']:.0f} DMX updates/sec")
+        print(f"For line composer, use hold = {state['hold_ms']:.0f}ms per segment")
+        print(f"{'='*60}\n")
+
+    except KeyboardInterrupt:
+        print("\nInterrupted")
+    finally:
+        state['running'] = False
+        time.sleep(0.05)
+        laser.off()
+        time.sleep(0.3)
+        driver.stop()
+
+
+# ──────────────────────────────────────────────────────
+#  MODE 3: LINE COMPOSER (synced to MCU rate)
+# ──────────────────────────────────────────────────────
+
+# Shapes as lists of line segments: (pattern, x, y, zoom)
+# Pattern 60 = horizontal, 70 = vertical, 80 = diagonal
+
 RECT_SEGMENTS = [
-    # Horizontal lines (pattern 60)
-    (60, 128, 70,  40),   # Top edge
+    (60, 128,  70, 40),   # Top edge
     (60, 128, 190, 40),   # Bottom edge
-    # Vertical lines (pattern 70)
-    (70, 70,  128, 40),   # Left edge
+    (70,  70, 128, 40),   # Left edge
     (70, 190, 128, 40),   # Right edge
 ]
 
-# Letter "Q" approximation
 Q_SEGMENTS = [
     (60, 128,  55, 40),   # Top
     (60, 128, 200, 40),   # Bottom
@@ -145,22 +294,19 @@ Q_SEGMENTS = [
     (80, 175, 195, 25),   # Diagonal tail
 ]
 
-# Letter "W" approximation (4 vertical-ish strokes)
 W_SEGMENTS = [
     (70,  50, 128, 50),   # Left stroke
     (80,  90, 170, 35),   # Down-right
-    (80, 130, 100, 35),   # Up-right  (would need "other diagonal" - doesn't exist cleanly)
+    (80, 130, 100, 35),   # Up-right
     (70, 170, 128, 50),   # Middle-right stroke
     (70, 200, 128, 50),   # Right stroke
 ]
 
-# Cross / plus sign
 CROSS_SEGMENTS = [
     (60, 128, 128, 60),   # Horizontal bar
     (70, 128, 128, 60),   # Vertical bar
 ]
 
-# Triangle
 TRI_SEGMENTS = [
     (60, 128,  70, 50),   # Top edge
     (60, 100, 190, 35),   # Bottom-left edge
@@ -178,8 +324,18 @@ COMPOSE_SHAPES = {
 }
 
 
-def compose_loop(laser, state):
-    """Rapidly cycle through line segments to compose shapes."""
+def compose_loop_synced(laser, driver, state):
+    """
+    Cycle through line segments, synced to DMX frame transmission.
+    
+    Key insight: we must hold each segment for at least 1 full DMX frame
+    (25ms at 40Hz) so the MCU sees and processes it. Changing the buffer
+    faster than the TX rate is pointless — the MCU only sees what the
+    TX thread actually sends.
+    
+    Strategy: update the buffer, then WAIT for the DMX TX thread to send
+    at least 1-2 frames before changing to the next segment.
+    """
     while state['running']:
         segments = state['segments']
         if not segments:
@@ -189,40 +345,47 @@ def compose_loop(laser, state):
         for pat, x, y, zoom in segments:
             if not state['running']:
                 break
-            # Set pattern type (h-line, v-line, diagonal)
+            if state['segments'] is not segments:
+                break  # Shape changed, restart
+
+            # Set all properties at once
             laser.set_pattern(pat)
-            laser.set_zoom(zoom + state['zoom_offset'])
-            laser.set_position(x + state['x_off'], y + state['y_off'])
-            # Hold this segment for a fraction of a DMX frame
-            # The DMX TX thread will transmit whatever's in the buffer
-            time.sleep(state['hold_time'])
+            laser.set_zoom(max(0, min(255, zoom + state['zoom_offset'])))
+            laser.set_position(
+                max(11, min(255, x + state['x_off'])),
+                max(11, min(255, y + state['y_off']))
+            )
+
+            # Wait for MCU to process this segment
+            # The DMX TX thread runs at 40Hz (25ms per frame)
+            # We need the MCU to receive AND display this segment,
+            # so hold for hold_ms (should be >= 25ms for 40Hz)
+            time.sleep(state['hold_ms'] / 1000.0)
 
 
-def mode_line_composer(fast_dmx=False):
-    """Compose shapes from positioned line pattern segments."""
-    mode_name = "FAST DMX COMPOSER" if fast_dmx else "LINE COMPOSER"
+def mode_line_composer():
+    """Compose shapes from positioned line segments, synced to MCU rate."""
     print("\n" + "=" * 60)
-    print(f"MODE {'3' if fast_dmx else '2'}: {mode_name}")
+    print("MODE 3: LINE COMPOSER (MCU-synced)")
     print("=" * 60)
-    print("Composes shapes by rapidly cycling H/V/diagonal line segments.")
-    print("Each line is a full MK2 pattern positioned at specific X/Y.\n")
+    print()
+    print("Composes shapes by cycling line segments. Each segment is held")
+    print("long enough for the STC 89C516RD+ MCU to process and display it.")
+    print()
+    print("The MCU processes DMX at ~25-40Hz. With N segments, each shows")
+    print("at 40/N Hz. For 2 segments (cross): ~20Hz each = visible.")
+    print("For 5 segments (Q letter): ~8Hz each = flickery but recognizable.")
+    print()
+    print("Tip: run Mode 2 first to find your MCU's exact processing rate.\n")
 
     universe = DMXUniverse()
-
-    if fast_dmx:
-        # Override DMX refresh rate for maximum speed
-        print("⚡ Fast DMX mode: overriding refresh rate to MAX")
-        print("   22 channels × 44μs = ~1.2ms per frame = ~800 fps theoretical\n")
-        driver = DMXDriver(refresh_hz=500)  # 500Hz instead of 40Hz
-    else:
-        driver = DMXDriver()
-
+    driver = DMXDriver()
     laser = MK2(universe, LASER1_ADDRESS, name="Laser 1")
 
     state = {
         'running': True,
-        'segments': RECT_SEGMENTS,
-        'hold_time': 0.005,  # 5ms per segment = 200 segment-draws/sec
+        'segments': CROSS_SEGMENTS,  # Start with cross (only 2 segments)
+        'hold_ms': 30.0,  # ms to hold each segment (slightly > 1 DMX frame)
         'x_off': 0,
         'y_off': 0,
         'zoom_offset': 0,
@@ -241,19 +404,27 @@ def mode_line_composer(fast_dmx=False):
 
         print("✓ Laser ready!")
         print("\nShapes:")
-        for k, (name, _) in COMPOSE_SHAPES.items():
-            segs = len(COMPOSE_SHAPES[k][1])
-            print(f"  {k} - {name} ({segs} segments)")
+        for k, (name, segs) in COMPOSE_SHAPES.items():
+            n = len(segs)
+            each_hz = 1000 / (state['hold_ms'] * n)
+            print(f"  {k} - {name:12s} ({n} segs, ~{each_hz:.0f}Hz each)")
         print("\nControls:")
-        print("  w/a/s/d     Move shape")
-        print("  +/-         Segment zoom offset")
-        print("  faster      Decrease hold time (faster cycling)")
-        print("  slower      Increase hold time (slower cycling)")
-        print("  status      Show current settings")
+        print("  w/a/s/d     Move")
+        print("  +/-         Zoom offset")
+        print("  hold [ms]   Set hold time per segment (default: 30)")
+        print("  status      Current settings")
         print("  q           Quit\n")
 
-        # Start composing
-        thread = threading.Thread(target=compose_loop, args=(laser, state), daemon=True)
+        n = len(state['segments'])
+        each_hz = 1000 / (state['hold_ms'] * n)
+        print(f"Starting with Cross + (2 segments, {state['hold_ms']:.0f}ms hold, "
+              f"~{each_hz:.0f}Hz per segment)\n")
+
+        thread = threading.Thread(
+            target=compose_loop_synced,
+            args=(laser, driver, state),
+            daemon=True
+        )
         thread.start()
 
         while True:
@@ -267,9 +438,11 @@ def mode_line_composer(fast_dmx=False):
             elif cmd in COMPOSE_SHAPES:
                 name, segs = COMPOSE_SHAPES[cmd]
                 state['segments'] = segs
-                cycle_ms = len(segs) * state['hold_time'] * 1000
-                fps = 1000 / cycle_ms if cycle_ms > 0 else 0
-                print(f"Shape: {name} ({len(segs)} segments, {cycle_ms:.0f}ms/cycle, ~{fps:.0f} cycles/sec)")
+                n = len(segs)
+                each_hz = 1000 / (state['hold_ms'] * n)
+                cycle_ms = n * state['hold_ms']
+                print(f"Shape: {name} ({n} segs, {cycle_ms:.0f}ms/cycle, "
+                      f"~{each_hz:.0f}Hz per segment)")
             elif cmd == 'w':
                 state['y_off'] = max(-80, state['y_off'] - 10)
             elif cmd == 's':
@@ -284,21 +457,25 @@ def mode_line_composer(fast_dmx=False):
             elif cmd == '-':
                 state['zoom_offset'] = max(-40, state['zoom_offset'] - 5)
                 print(f"Zoom offset: {state['zoom_offset']}")
-            elif cmd == 'faster':
-                state['hold_time'] = max(0.001, state['hold_time'] - 0.002)
-                print(f"Hold: {state['hold_time']*1000:.1f}ms")
-            elif cmd == 'slower':
-                state['hold_time'] = min(0.05, state['hold_time'] + 0.002)
-                print(f"Hold: {state['hold_time']*1000:.1f}ms")
+            elif cmd.startswith('hold '):
+                try:
+                    val = float(cmd.split()[1])
+                    state['hold_ms'] = max(5, min(200, val))
+                    n = len(state['segments'])
+                    each_hz = 1000 / (state['hold_ms'] * n)
+                    print(f"Hold: {state['hold_ms']:.0f}ms  "
+                          f"(~{each_hz:.0f}Hz per segment with {n} segments)")
+                except ValueError:
+                    print("Usage: hold [ms]")
             elif cmd == 'status':
-                segs = len(state['segments'])
-                cycle_ms = segs * state['hold_time'] * 1000
-                fps = 1000 / cycle_ms if cycle_ms > 0 else 0
-                print(f"  Hold: {state['hold_time']*1000:.1f}ms  Segments: {segs}")
-                print(f"  Cycle: {cycle_ms:.0f}ms  ~{fps:.0f} shapes/sec")
-                print(f"  Offset: ({state['x_off']}, {state['y_off']})  Zoom+: {state['zoom_offset']}")
-                dmx_hz = driver.refresh_hz
-                print(f"  DMX refresh: {dmx_hz} Hz ({'FAST' if fast_dmx else 'normal'})")
+                n = len(state['segments'])
+                cycle_ms = n * state['hold_ms']
+                each_hz = 1000 / (state['hold_ms'] * max(1, n))
+                print(f"  Hold: {state['hold_ms']:.0f}ms  Segments: {n}")
+                print(f"  Cycle: {cycle_ms:.0f}ms  ~{each_hz:.0f}Hz per segment")
+                print(f"  Offset: ({state['x_off']}, {state['y_off']})  "
+                      f"Zoom+: {state['zoom_offset']}")
+                print(f"  DMX TX rate: {driver.refresh_hz}Hz")
 
     except KeyboardInterrupt:
         print("\nInterrupted")
@@ -311,17 +488,267 @@ def mode_line_composer(fast_dmx=False):
 
 
 # ──────────────────────────────────────────────────────
-#  MODE 4: PATTERN STROBE
+#  MODE 4: DUAL LASER
+# ──────────────────────────────────────────────────────
+
+def mode_dual_laser():
+    """Both lasers showing persistent line segments simultaneously."""
+    print("\n" + "=" * 60)
+    print("MODE 4: DUAL LASER COMPOSER")
+    print("=" * 60)
+    print("Both lasers show a persistent segment simultaneously.")
+    print("No time-sharing = no flicker. Perfect for 2-segment shapes.\n")
+
+    universe = DMXUniverse()
+    driver = DMXDriver()
+    laser1 = MK2(universe, LASER1_ADDRESS, name="Laser 1")
+    laser2 = MK2(universe, LASER2_ADDRESS, name="Laser 2")
+
+    DUAL_PRESETS = {
+        '1': ("Cross +",
+              (60, 128, 128, 60),
+              (70, 128, 128, 60)),
+        '2': ("T-shape",
+              (60, 128,  80, 60),
+              (70, 128, 150, 50)),
+        '3': ("L-shape",
+              (60, 128, 200, 50),
+              (70,  80, 128, 60)),
+        '4': ("Corner",
+              (60, 128,  80, 50),
+              (70, 190, 140, 50)),
+        '5': ("= equals",
+              (60, 128, 100, 60),
+              (60, 128, 160, 60)),
+        '6': ("|| parallel",
+              (70, 100, 128, 60),
+              (70, 160, 128, 60)),
+    }
+
+    try:
+        driver.start(universe)
+        time.sleep(0.5)
+
+        for laser in [laser1, laser2]:
+            laser.set_mode(MK2Mode.STATIC_PATTERN)
+            laser.set_color(255)
+            laser.set_color_segment(0)
+            laser.set_scanning_speed(255)
+            laser.center()
+        time.sleep(0.3)
+
+        print("✓ Both lasers ready!")
+        print("\nPresets:")
+        for k, (name, _, _) in DUAL_PRESETS.items():
+            print(f"  {k} - {name}")
+        print("\nManual control:")
+        print("  l1p/l1x/l1y/l1z [val]   Laser 1")
+        print("  l2p/l2x/l2y/l2z [val]   Laser 2")
+        print("  q - Quit\n")
+
+        while True:
+            try:
+                cmd = input("> ").strip().lower()
+            except EOFError:
+                break
+
+            if cmd == 'q':
+                break
+            elif cmd in DUAL_PRESETS:
+                name, l1_cfg, l2_cfg = DUAL_PRESETS[cmd]
+                pat1, x1, y1, z1 = l1_cfg
+                pat2, x2, y2, z2 = l2_cfg
+                laser1.set_pattern(pat1)
+                laser1.set_position(x1, y1)
+                laser1.set_zoom(z1)
+                laser2.set_pattern(pat2)
+                laser2.set_position(x2, y2)
+                laser2.set_zoom(z2)
+                print(f"Preset: {name}")
+                print(f"  L1: pat={pat1} pos=({x1},{y1}) zoom={z1}")
+                print(f"  L2: pat={pat2} pos=({x2},{y2}) zoom={z2}")
+            else:
+                parts = cmd.split()
+                if len(parts) == 2:
+                    try:
+                        val = int(parts[1])
+                        target = parts[0]
+                        lobj = laser1 if target.startswith('l1') else \
+                               laser2 if target.startswith('l2') else None
+                        if lobj:
+                            if target.endswith('p'):
+                                lobj.set_pattern(val)
+                            elif target.endswith('x'):
+                                lobj.set_x_position(val)
+                            elif target.endswith('y'):
+                                lobj.set_y_position(val)
+                            elif target.endswith('z'):
+                                lobj.set_zoom(val)
+                            print(f"OK: {target} = {val}")
+                    except (ValueError, Exception) as e:
+                        print(f"Error: {e}")
+
+    except KeyboardInterrupt:
+        print("\nInterrupted")
+    finally:
+        laser1.off()
+        laser2.off()
+        time.sleep(0.3)
+        driver.stop()
+
+
+# ──────────────────────────────────────────────────────
+#  MODE 5: DUAL LASER + TIME-SHARED EXTRAS
+# ──────────────────────────────────────────────────────
+
+def mode_dual_compose():
+    """
+    2 persistent segments (one per laser) + time-shared extras on laser 1.
+    
+    Laser 2: always shows one persistent segment (no switching).
+    Laser 1: alternates between its persistent segment and bonus segments.
+    
+    This gives you 2 solid lines + 1-3 flickering lines = more complex shapes.
+    """
+    print("\n" + "=" * 60)
+    print("MODE 5: DUAL + COMPOSE")
+    print("=" * 60)
+    print("Laser 2 = 1 persistent segment (always visible)")
+    print("Laser 1 = alternates between N segments (time-shared)")
+    print("Result: 1 solid + N flickering lines. Best with few segments.\n")
+
+    universe = DMXUniverse()
+    driver = DMXDriver()
+    laser1 = MK2(universe, LASER1_ADDRESS, name="Laser 1 (switching)")
+    laser2 = MK2(universe, LASER2_ADDRESS, name="Laser 2 (persistent)")
+
+    # Presets: (name, laser2_config, [laser1_segments...])
+    PRESETS = {
+        '1': ("Box (V + 3H)",
+              (70, 128, 128, 60),                            # L2: vertical bar (persistent)
+              [(60, 128,  70, 50),                            # L1: top H
+               (60, 128, 190, 50),                            # L1: bottom H
+               (70, 200, 128, 60)]),                          # L1: right V (L2 covers left)
+        '2': ("H + cross inside",
+              (60, 128,  60, 70),                             # L2: top bar (persistent)
+              [(60, 128, 200, 70),                            # L1: bottom bar
+               (60, 128, 128, 40),                            # L1: middle H (short)
+               (70, 128, 128, 40)]),                          # L1: middle V (short)
+        '3': ("Cross + corners",
+              (60, 128, 128, 80),                             # L2: horizontal (persistent)
+              [(70, 128, 128, 80),                            # L1: vertical
+               (80, 100, 100, 20),                            # L1: corner accent
+               (80, 160, 160, 20)]),                          # L1: corner accent
+    }
+
+    state = {
+        'running': True,
+        'l1_segments': [(60, 128, 128, 60), (70, 128, 128, 60)],
+        'hold_ms': 30.0,
+    }
+
+    def l1_loop():
+        while state['running']:
+            segs = state['l1_segments']
+            for pat, x, y, zoom in segs:
+                if not state['running']:
+                    break
+                laser1.set_pattern(pat)
+                laser1.set_zoom(zoom)
+                laser1.set_position(x, y)
+                time.sleep(state['hold_ms'] / 1000.0)
+
+    try:
+        driver.start(universe)
+        time.sleep(0.5)
+
+        for laser in [laser1, laser2]:
+            laser.set_mode(MK2Mode.STATIC_PATTERN)
+            laser.set_color(255)
+            laser.set_color_segment(0)
+            laser.set_scanning_speed(255)
+            laser.center()
+        time.sleep(0.3)
+
+        print("✓ Both lasers ready!")
+        print("\nPresets:")
+        for k, (name, _, _) in PRESETS.items():
+            print(f"  {k} - {name}")
+        print("\nControls:")
+        print("  hold [ms]   Set hold time")
+        print("  l2p/l2x/l2y/l2z [val]  Laser 2 (persistent)")
+        print("  q - Quit\n")
+
+        thread = threading.Thread(target=l1_loop, daemon=True)
+        thread.start()
+
+        while True:
+            try:
+                cmd = input("> ").strip().lower()
+            except EOFError:
+                break
+
+            if cmd == 'q':
+                break
+            elif cmd in PRESETS:
+                name, l2_cfg, l1_segs = PRESETS[cmd]
+                pat2, x2, y2, z2 = l2_cfg
+                laser2.set_pattern(pat2)
+                laser2.set_position(x2, y2)
+                laser2.set_zoom(z2)
+                state['l1_segments'] = l1_segs
+                n = len(l1_segs)
+                each_hz = 1000 / (state['hold_ms'] * n)
+                print(f"Preset: {name}")
+                print(f"  L2 (persistent): pat={pat2} pos=({x2},{y2}) zoom={z2}")
+                print(f"  L1 (switching): {n} segments @ ~{each_hz:.0f}Hz each")
+            elif cmd.startswith('hold '):
+                try:
+                    val = float(cmd.split()[1])
+                    state['hold_ms'] = max(10, min(200, val))
+                    n = len(state['l1_segments'])
+                    each_hz = 1000 / (state['hold_ms'] * n)
+                    print(f"Hold: {state['hold_ms']:.0f}ms (~{each_hz:.0f}Hz per segment)")
+                except ValueError:
+                    print("Usage: hold [ms]")
+            else:
+                parts = cmd.split()
+                if len(parts) == 2 and parts[0].startswith('l2'):
+                    try:
+                        val = int(parts[1])
+                        if parts[0] == 'l2p':
+                            laser2.set_pattern(val)
+                        elif parts[0] == 'l2x':
+                            laser2.set_x_position(val)
+                        elif parts[0] == 'l2y':
+                            laser2.set_y_position(val)
+                        elif parts[0] == 'l2z':
+                            laser2.set_zoom(val)
+                        print(f"OK: {parts[0]} = {val}")
+                    except Exception as e:
+                        print(f"Error: {e}")
+
+    except KeyboardInterrupt:
+        print("\nInterrupted")
+    finally:
+        state['running'] = False
+        time.sleep(0.05)
+        laser1.off()
+        laser2.off()
+        time.sleep(0.3)
+        driver.stop()
+
+
+# ──────────────────────────────────────────────────────
+#  MODE 6: PATTERN STROBE
 # ──────────────────────────────────────────────────────
 
 def mode_pattern_strobe():
-    """Test rapid pattern interruption via color/mode toggling."""
+    """Rapid color/mode toggling to interrupt patterns."""
     print("\n" + "=" * 60)
-    print("MODE 4: PATTERN STROBE")
+    print("MODE 6: PATTERN STROBE")
     print("=" * 60)
-    print("Displays a full pattern and rapidly toggles visibility (color on/off)")
-    print("to see if we can 'slice' the internal scan and create partial shapes.\n")
-    print("Also tests rapid mode switching (STATIC ↔ OFF) as an alternative.\n")
+    print("Toggle pattern visibility rapidly via color/mode switching.\n")
 
     universe = DMXUniverse()
     driver = DMXDriver()
@@ -329,9 +756,9 @@ def mode_pattern_strobe():
 
     state = {
         'running': True,
-        'strobe_method': 'color',  # 'color' or 'mode'
-        'on_time': 0.005,    # Time visible (seconds)
-        'off_time': 0.020,   # Time dark (seconds)
+        'strobe_method': 'color',
+        'on_time': 0.005,
+        'off_time': 0.020,
         'pattern': 0,
         'zoom': 128,
     }
@@ -340,25 +767,14 @@ def mode_pattern_strobe():
         while state['running']:
             method = state['strobe_method']
             if method == 'color':
-                # ON: set color
                 laser.set_color(255)
                 time.sleep(state['on_time'])
-                # OFF: blank
                 laser.set_color(0)
                 time.sleep(state['off_time'])
             elif method == 'mode':
-                # ON: static pattern
                 laser.set_mode(MK2Mode.STATIC_PATTERN)
                 time.sleep(state['on_time'])
-                # OFF: laser off
                 laser.set_mode(MK2Mode.OFF)
-                time.sleep(state['off_time'])
-            elif method == 'zoom':
-                # ON: normal zoom
-                laser.set_zoom(state['zoom'])
-                time.sleep(state['on_time'])
-                # OFF: zoom to zero (smallest)
-                laser.set_zoom(0)
                 time.sleep(state['off_time'])
 
     try:
@@ -376,15 +792,13 @@ def mode_pattern_strobe():
 
         print("✓ Laser ready!")
         print("\nControls:")
-        print("  p [num]    Set pattern (0-255)")
-        print("  z [num]    Set zoom (0-255)")
-        print("  c          Strobe method: color toggle")
-        print("  m          Strobe method: mode toggle (OFF↔STATIC)")
-        print("  v          Strobe method: zoom toggle")
-        print("  on [ms]    Set ON time in ms")
-        print("  off [ms]   Set OFF time in ms")
-        print("  stop       Stop strobing (full pattern visible)")
-        print("  start      Start strobing")
+        print("  p [num]    Pattern (0-255)")
+        print("  z [num]    Zoom (0-255)")
+        print("  c          Method: color (255↔0)")
+        print("  m          Method: mode (STATIC↔OFF)")
+        print("  on [ms]    ON time")
+        print("  off [ms]   OFF time")
+        print("  start/stop Toggle strobing")
         print("  q          Quit\n")
 
         strobing = False
@@ -413,16 +827,13 @@ def mode_pattern_strobe():
                 laser.set_mode(MK2Mode.STATIC_PATTERN)
                 laser.set_color(255)
                 laser.set_zoom(state['zoom'])
-                print("Strobing stopped - full pattern visible")
+                print("Stopped")
             elif cmd == 'c':
                 state['strobe_method'] = 'color'
-                print("Method: color toggle (color 255↔0)")
+                print("Method: color")
             elif cmd == 'm':
                 state['strobe_method'] = 'mode'
-                print("Method: mode toggle (STATIC↔OFF)")
-            elif cmd == 'v':
-                state['strobe_method'] = 'zoom'
-                print("Method: zoom toggle (zoom↔0)")
+                print("Method: mode")
             elif cmd.startswith('p '):
                 try:
                     val = int(cmd.split()[1])
@@ -430,7 +841,7 @@ def mode_pattern_strobe():
                     laser.set_pattern(state['pattern'])
                     print(f"Pattern: {state['pattern']}")
                 except ValueError:
-                    print("Usage: p [0-255]")
+                    pass
             elif cmd.startswith('z '):
                 try:
                     val = int(cmd.split()[1])
@@ -438,21 +849,19 @@ def mode_pattern_strobe():
                     laser.set_zoom(state['zoom'])
                     print(f"Zoom: {state['zoom']}")
                 except ValueError:
-                    print("Usage: z [0-255]")
+                    pass
             elif cmd.startswith('on '):
                 try:
-                    val = float(cmd.split()[1])
-                    state['on_time'] = val / 1000.0
-                    print(f"ON time: {val:.1f}ms")
+                    state['on_time'] = float(cmd.split()[1]) / 1000
+                    print(f"ON: {state['on_time']*1000:.1f}ms")
                 except ValueError:
-                    print("Usage: on [ms]")
+                    pass
             elif cmd.startswith('off '):
                 try:
-                    val = float(cmd.split()[1])
-                    state['off_time'] = val / 1000.0
-                    print(f"OFF time: {val:.1f}ms")
+                    state['off_time'] = float(cmd.split()[1]) / 1000
+                    print(f"OFF: {state['off_time']*1000:.1f}ms")
                 except ValueError:
-                    print("Usage: off [ms]")
+                    pass
 
     except KeyboardInterrupt:
         print("\nInterrupted")
@@ -465,242 +874,156 @@ def mode_pattern_strobe():
 
 
 # ──────────────────────────────────────────────────────
-#  MODE 5: DUAL LASER COMPOSER
+#  MODE 7: GALVO SIGNAL PROBE
 # ──────────────────────────────────────────────────────
 
-def mode_dual_laser():
-    """Use both lasers simultaneously - no time-sharing needed."""
+def mode_galvo_probe():
+    """
+    For hardware hacking with the laser case open.
+    
+    Steps through known galvo positions so you can probe the PCB with a
+    multimeter or oscilloscope to identify the galvo drive signals.
+    
+    The STC 89C516RD+ doesn't have a built-in DAC, so it likely drives
+    the galvos through:
+    
+    Option A: External DAC chip (look for 8-16 pin DIP/SOP near galvo wires)
+              Common: DAC0808, TLC5615, MCP4921
+    
+    Option B: PWM from MCU → RC filter → op-amp → galvo
+              Look for capacitors + op-amp (LM358, TL072) near galvo wires
+    
+    Option C: Dedicated galvo driver IC
+              Look for a separate board near the galvo motors
+    
+    Identifying these signals lets you inject your own X/Y voltages.
+    
+    SAFETY: The galvos use 5-12V. The laser diodes use higher voltage.
+    NEVER probe laser diode power supplies. Only probe the galvo signal path.
+    """
     print("\n" + "=" * 60)
-    print("MODE 5: DUAL LASER COMPOSER")
+    print("MODE 7: GALVO SIGNAL PROBE")
     print("=" * 60)
-    print("Uses BOTH lasers simultaneously. Each laser can display a")
-    print("different line segment persistently (no flicker). Together")
-    print("they compose shapes from 2 persistent segments.\n")
-    print("One laser draws horizontal elements, the other vertical.\n")
+    print()
+    print("For probing the MK2 PCB with multimeter/oscilloscope.")
+    print("Steps through known positions so you can identify galvo signals.")
+    print()
+    print("STC 89C516RD+ pinout (relevant pins):")
+    print("  8051 has NO built-in DAC. It must use external conversion.")
+    print("  Look for: PWM output pins → RC filter → galvo driver")
+    print("  Or: parallel bus → external DAC → galvo driver")
+    print()
+    print("WHAT TO LOOK FOR on the PCB:")
+    print("  1. Follow wires from X/Y galvo motors back to the PCB")
+    print("  2. Identify the galvo driver (op-amp or driver IC)")
+    print("  3. Find the input to that driver (this is our injection point)")
+    print("  4. Measure voltage range at that point during the tests below")
+    print()
+    print("SAFETY: Don't probe near laser diode power! Only galvo signals.\n")
 
     universe = DMXUniverse()
     driver = DMXDriver()
-    laser1 = MK2(universe, LASER1_ADDRESS, name="Laser 1 (H-lines)")
-    laser2 = MK2(universe, LASER2_ADDRESS, name="Laser 2 (V-lines)")
+    laser = MK2(universe, LASER1_ADDRESS, name="Laser 1")
 
-    # Preset compositions using 2 lasers
-    DUAL_PRESETS = {
-        '1': ("Cross +",
-              (60, 128, 128, 60),    # L1: horizontal bar
-              (70, 128, 128, 60)),   # L2: vertical bar
-        '2': ("T-shape",
-              (60, 128,  80, 60),    # L1: horizontal top bar
-              (70, 128, 150, 50)),   # L2: vertical stem
-        '3': ("L-shape",
-              (60, 128, 200, 50),    # L1: horizontal bottom
-              (70,  80, 128, 60)),   # L2: vertical left
-        '4': ("Corner ┐",
-              (60, 128,  80, 50),    # L1: horizontal top
-              (70, 190, 140, 50)),   # L2: vertical right
-    }
+    # Probe test sequences
+    TESTS = [
+        ("CENTER",      5,   5,   "Both galvos at center. Measure baseline voltages."),
+        ("X-LEFT",      11,  128, "X galvo to minimum. Note X signal voltage."),
+        ("X-CENTER",    128, 128, "X galvo to center."),
+        ("X-RIGHT",     255, 128, "X galvo to maximum. Calculate X voltage range."),
+        ("Y-TOP",       128, 11,  "Y galvo to minimum. Note Y signal voltage."),
+        ("Y-CENTER",    128, 128, "Y galvo to center."),
+        ("Y-BOTTOM",    128, 255, "Y galvo to maximum. Calculate Y voltage range."),
+        ("CORNER-TL",   11,  11,  "Both at min. Verify both channels independent."),
+        ("CORNER-BR",   255, 255, "Both at max."),
+        ("X-SWEEP",     None, 128, "X sweeping slowly (watch on scope for waveform)."),
+        ("Y-SWEEP",     128, None, "Y sweeping slowly."),
+    ]
 
     try:
         driver.start(universe)
         time.sleep(0.5)
 
-        for laser in [laser1, laser2]:
-            laser.set_mode(MK2Mode.STATIC_PATTERN)
-            laser.set_color(255)
-            laser.set_color_segment(0)
-            laser.set_scanning_speed(255)
-            laser.center()
-        time.sleep(0.3)
-
-        print("✓ Both lasers ready!")
-        print("\nPresets:")
-        for k, (name, _, _) in DUAL_PRESETS.items():
-            print(f"  {k} - {name}")
-        print("\n  Manual control:")
-        print("  l1p [pat]  l1x [x]  l1y [y]  l1z [zoom]   (laser 1)")
-        print("  l2p [pat]  l2x [x]  l2y [y]  l2z [zoom]   (laser 2)")
-        print("  q - Quit\n")
-
-        while True:
-            try:
-                cmd = input("> ").strip().lower()
-            except EOFError:
-                break
-
-            if cmd == 'q':
-                break
-            elif cmd in DUAL_PRESETS:
-                name, l1_cfg, l2_cfg = DUAL_PRESETS[cmd]
-                pat1, x1, y1, z1 = l1_cfg
-                pat2, x2, y2, z2 = l2_cfg
-                laser1.set_pattern(pat1)
-                laser1.set_position(x1, y1)
-                laser1.set_zoom(z1)
-                laser2.set_pattern(pat2)
-                laser2.set_position(x2, y2)
-                laser2.set_zoom(z2)
-                print(f"Preset: {name}")
-                print(f"  L1: pat={pat1} pos=({x1},{y1}) zoom={z1}")
-                print(f"  L2: pat={pat2} pos=({x2},{y2}) zoom={z2}")
-            else:
-                # Manual commands: l1p, l1x, l1y, l1z, l2p, l2x, l2y, l2z
-                parts = cmd.split()
-                if len(parts) == 2:
-                    try:
-                        val = int(parts[1])
-                        target = parts[0]
-                        laser_obj = laser1 if target.startswith('l1') else laser2 if target.startswith('l2') else None
-                        if laser_obj:
-                            if target.endswith('p'):
-                                laser_obj.set_pattern(val)
-                            elif target.endswith('x'):
-                                laser_obj.set_x_position(val)
-                            elif target.endswith('y'):
-                                laser_obj.set_y_position(val)
-                            elif target.endswith('z'):
-                                laser_obj.set_zoom(val)
-                            print(f"OK: {target} = {val}")
-                    except (ValueError, Exception) as e:
-                        print(f"Error: {e}")
-
-    except KeyboardInterrupt:
-        print("\nInterrupted")
-    finally:
-        laser1.off()
-        laser2.off()
-        time.sleep(0.3)
-        driver.stop()
-
-
-# ──────────────────────────────────────────────────────
-#  MODE 6: MIXED APPROACH - Dot tracing + Line segments
-# ──────────────────────────────────────────────────────
-
-def mode_mixed():
-    """
-    Hybrid approach: one laser does dot-tracing (like draw_shapes.py),
-    the other displays a positioned line segment for fill/structure.
-
-    Laser 1: continuously traces a shape outline with dot pen
-    Laser 2: static line pattern positioned for structure
-    """
-    print("\n" + "=" * 60)
-    print("MODE 6: MIXED (Dot trace + Line segment)")
-    print("=" * 60)
-    print("Laser 1: dot-traces a shape outline at high speed")
-    print("Laser 2: displays a static line segment for structure\n")
-
-    universe = DMXUniverse()
-    driver = DMXDriver()
-    laser1 = MK2(universe, LASER1_ADDRESS, name="Tracer")
-    laser2 = MK2(universe, LASER2_ADDRESS, name="Line")
-
-    # Circle outline points for laser 1
-    def make_circle(cx, cy, r, n=30):
-        pts = []
-        for i in range(n + 1):
-            a = 2 * math.pi * i / n
-            pts.append((int(cx + r * math.cos(a)), int(cy + r * math.sin(a))))
-        return pts
-
-    # Square outline
-    def make_square(cx, cy, s, n=8):
-        pts = []
-        corners = [(cx-s, cy-s), (cx+s, cy-s), (cx+s, cy+s), (cx-s, cy+s), (cx-s, cy-s)]
-        for i in range(len(corners) - 1):
-            x1, y1 = corners[i]
-            x2, y2 = corners[i + 1]
-            for j in range(n):
-                t = j / n
-                pts.append((int(x1 + (x2-x1)*t), int(y1 + (y2-y1)*t)))
-        return pts
-
-    shapes = {
-        '1': ("Circle", lambda: make_circle(128, 128, 60)),
-        '2': ("Square", lambda: make_square(128, 128, 50)),
-    }
-
-    state = {
-        'running': True,
-        'points': make_circle(128, 128, 60),
-        'speed': 0.002,
-    }
-
-    def trace_loop():
-        while state['running']:
-            for x, y in state['points']:
-                if not state['running']:
-                    break
-                laser1.set_position(max(11, min(255, x)), max(11, min(255, y)))
-                time.sleep(state['speed'])
-
-    try:
-        driver.start(universe)
+        laser.set_mode(MK2Mode.STATIC_PATTERN)
+        laser.set_pattern(0)
+        laser.set_zoom(0)
+        laser.center()
+        laser.set_color(255)
+        laser.set_color_segment(0)
+        laser.set_scanning_speed(255)
         time.sleep(0.5)
 
-        # Laser 1: dot tracer
-        laser1.set_mode(MK2Mode.STATIC_PATTERN)
-        laser1.set_pattern(0)
-        laser1.set_zoom(0)
-        laser1.set_color(255)
-        laser1.set_color_segment(0)
-        laser1.set_scanning_speed(255)
-        laser1.center()
+        print("✓ Laser on. Starting probe sequence.\n")
+        print("Press Enter to advance to next test, 'q' to quit.\n")
 
-        # Laser 2: static positioned line
-        laser2.set_mode(MK2Mode.STATIC_PATTERN)
-        laser2.set_pattern(60)   # Horizontal line
-        laser2.set_zoom(40)
-        laser2.set_color(200)    # Slightly different color
-        laser2.set_color_segment(0)
-        laser2.set_scanning_speed(255)
-        laser2.set_position(128, 128)
-        time.sleep(0.3)
+        for i, (name, x, y, desc) in enumerate(TESTS):
+            print(f"{'─'*60}")
+            print(f"TEST {i+1}/{len(TESTS)}: {name}")
+            print(f"  {desc}")
 
-        print("✓ Both lasers ready!")
-        print("\nLaser 1 traces outline, Laser 2 shows a positioned line")
-        print("Controls:")
-        print("  1/2           Circle / Square outline")
-        print("  l2p/l2x/l2y/l2z [val]  Control laser 2")
-        print("  q             Quit\n")
-
-        thread = threading.Thread(target=trace_loop, daemon=True)
-        thread.start()
-
-        while True:
-            try:
-                cmd = input("> ").strip().lower()
-            except EOFError:
-                break
-            if cmd == 'q':
-                break
-            elif cmd in shapes:
-                name, gen = shapes[cmd]
-                state['points'] = gen()
-                print(f"Tracing: {name}")
+            if x is None:
+                # X sweep
+                print("  Sweeping X from 11→255→11 (5 seconds)...")
+                for cycle in range(2):
+                    for pos in range(11, 256, 5):
+                        laser.set_position(pos, y)
+                        time.sleep(0.02)
+                    for pos in range(255, 10, -5):
+                        laser.set_position(pos, y)
+                        time.sleep(0.02)
+                laser.set_position(128, y)
+                print("  Sweep done. Did you see the waveform on scope?")
+            elif y is None:
+                # Y sweep
+                print("  Sweeping Y from 11→255→11 (5 seconds)...")
+                for cycle in range(2):
+                    for pos in range(11, 256, 5):
+                        laser.set_position(x, pos)
+                        time.sleep(0.02)
+                    for pos in range(255, 10, -5):
+                        laser.set_position(x, pos)
+                        time.sleep(0.02)
+                laser.set_position(x, 128)
+                print("  Sweep done.")
             else:
-                parts = cmd.split()
-                if len(parts) == 2:
-                    try:
-                        val = int(parts[1])
-                        if parts[0] == 'l2p':
-                            laser2.set_pattern(val)
-                        elif parts[0] == 'l2x':
-                            laser2.set_x_position(val)
-                        elif parts[0] == 'l2y':
-                            laser2.set_y_position(val)
-                        elif parts[0] == 'l2z':
-                            laser2.set_zoom(val)
-                        print(f"OK: {parts[0]} = {val}")
-                    except Exception as e:
-                        print(f"Error: {e}")
+                laser.set_position(x, y)
+                print(f"  Position: X={x:3d}  Y={y:3d}")
+
+            print()
+            result = input("  [Enter=next, r=repeat sweep, q=quit] ")
+            if result.lower() == 'q':
+                break
+            if result.lower() == 'r' and (x is None or y is None):
+                # Repeat sweep
+                if x is None:
+                    for pos in range(11, 256, 3):
+                        laser.set_position(pos, y)
+                        time.sleep(0.015)
+                    for pos in range(255, 10, -3):
+                        laser.set_position(pos, y)
+                        time.sleep(0.015)
+                else:
+                    for pos in range(11, 256, 3):
+                        laser.set_position(x, pos)
+                        time.sleep(0.015)
+                    for pos in range(255, 10, -3):
+                        laser.set_position(x, pos)
+                        time.sleep(0.015)
+
+        print(f"\n{'='*60}")
+        print("WHAT TO REPORT:")
+        print("  1. What voltage did you measure at X-LEFT vs X-RIGHT?")
+        print("  2. What voltage at Y-TOP vs Y-BOTTOM?")
+        print("  3. Did you see a clean ramp on the sweep tests?")
+        print("  4. What chip/IC is near the galvo wires?")
+        print("  5. What does the trace from MCU to galvo driver look like?")
+        print(f"{'='*60}\n")
+        print("With this info we can design the direct drive circuit.")
 
     except KeyboardInterrupt:
         print("\nInterrupted")
     finally:
-        state['running'] = False
-        time.sleep(0.05)
-        laser1.off()
-        laser2.off()
+        laser.off()
         time.sleep(0.3)
         driver.stop()
 
@@ -714,35 +1037,37 @@ def main():
     print("LaserPi - Drawing Lab")
     print("=" * 60)
     print()
-    print("Experimental techniques for precise laser drawing.")
+    print("MK2 MCU: STC 89C516RD+ (8051, processes DMX at ~25-40Hz)")
     print()
     print("Modes:")
-    print("  1  Pen Finder        - Find the smallest dot pattern")
-    print("  2  Line Composer     - Compose shapes from line segments (40Hz DMX)")
-    print("  3  Fast DMX Composer - Same but with ~500Hz DMX refresh")
-    print("  4  Pattern Strobe    - Interrupt patterns with rapid blanking")
-    print("  5  Dual Laser        - Two lasers, one shape, no flicker")
-    print("  6  Mixed             - Dot tracing + line segment (both lasers)")
+    print("  1  Pen Finder       Find the smallest dot pattern")
+    print("  2  MCU Rate Finder  Discover actual DMX processing speed")
+    print("  3  Line Composer    Compose shapes (MCU-synced segments)")
+    print("  4  Dual Laser       2 lasers, 2 segments, zero flicker")
+    print("  5  Dual + Compose   2 lasers: 1 persistent + N switching")
+    print("  6  Pattern Strobe   Rapid blanking experiments")
+    print("  7  Galvo Probe      Hardware hacking: identify signals")
     print()
 
-    # Check command-line argument
     if len(sys.argv) > 1:
         mode = sys.argv[1]
     else:
-        mode = input("Select mode (1-6): ").strip()
+        mode = input("Select mode (1-7): ").strip()
 
     if mode == '1':
         mode_pen_finder()
     elif mode == '2':
-        mode_line_composer(fast_dmx=False)
+        mode_rate_finder()
     elif mode == '3':
-        mode_line_composer(fast_dmx=True)
+        mode_line_composer()
     elif mode == '4':
-        mode_pattern_strobe()
-    elif mode == '5':
         mode_dual_laser()
+    elif mode == '5':
+        mode_dual_compose()
     elif mode == '6':
-        mode_mixed()
+        mode_pattern_strobe()
+    elif mode == '7':
+        mode_galvo_probe()
     else:
         print("Invalid mode")
 
