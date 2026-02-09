@@ -279,6 +279,8 @@ def mode_rate_finder():
         print("  ds [n]       Set dynamic speed 0-255 (e.g. 'ds 255')")
         print("  static       Switch to STATIC_PATTERN mode")
         print("  dynamic      Switch to DYNAMIC_PATTERN mode")
+        print("  load [name]  Load preset by name")
+        print("  list         List all available presets")
         print("  save [name]  Save current settings as preset")
         print("  q            Quit")
         print()
@@ -354,6 +356,49 @@ def mode_rate_finder():
                 state['laser_mode'] = MK2Mode.DYNAMIC_PATTERN
                 apply_settings()
                 print("Mode: DYNAMIC_PATTERN")
+            elif cmd.startswith('load '):
+                preset_name = cmd[5:].strip()
+                if preset_name:
+                    presets = load_presets()
+                    if preset_name in presets:
+                        preset = presets[preset_name]
+                        # Apply preset settings
+                        state['hold_ms'] = preset.get('hold_ms', 35.0)
+                        state['scan_speed'] = preset.get('scan_speed', 5)
+                        state['dyn_speed'] = preset.get('dynamic_speed', 1)
+                        state['zoom'] = preset.get('zoom', 255)
+                        state['pattern'] = preset.get('pattern', 1)
+                        
+                        # Handle laser mode
+                        mode_str = preset.get('laser_mode', 'STATIC_PATTERN')
+                        if mode_str == 'DYNAMIC_PATTERN':
+                            state['laser_mode'] = MK2Mode.DYNAMIC_PATTERN
+                        else:
+                            state['laser_mode'] = MK2Mode.STATIC_PATTERN
+                        
+                        apply_settings()
+                        mode_name = "STATIC" if state['laser_mode'] == MK2Mode.STATIC_PATTERN else "DYNAMIC"
+                        print(f"✓ Loaded preset '{preset_name}'")
+                        print(f"  {preset.get('description', '')}")
+                        print(f"  Mode: {mode_name}  Pattern: {state['pattern']}  Zoom: {state['zoom']}")
+                        print(f"  Scan: {state['scan_speed']}  DynSpeed: {state['dyn_speed']}  Hold: {state['hold_ms']:.0f}ms")
+                    else:
+                        print(f"❌ Preset '{preset_name}' not found. Use 'list' to see available presets.")
+                else:
+                    print("Usage: load [preset_name]")
+            elif cmd == 'list':
+                presets = load_presets()
+                if presets:
+                    print("\nAvailable presets:")
+                    for name, data in presets.items():
+                        desc = data.get('description', 'No description')
+                        mode = data.get('laser_mode', 'STATIC_PATTERN')
+                        pattern = data.get('pattern', 0)
+                        print(f"  • {name:20s} - {desc}")
+                        print(f"    Mode: {mode}  Pattern: {pattern}  Hold: {data.get('hold_ms', 35):.0f}ms")
+                    print()
+                else:
+                    print("No presets saved yet.")
             elif cmd.startswith('save '):
                 preset_name = cmd[5:].strip()
                 if preset_name:
