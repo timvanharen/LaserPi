@@ -34,7 +34,7 @@ def scan_address(universe, address, test_value=255, duration=0.5):
     universe.set_channel(address, 0)
 
 
-def scan_range(universe, start_addr, end_addr, test_value=255, duration=0.3):
+def scan_range(universe, start_addr, end_addr, test_value=255, duration=2.0):
     """
     Scan a range of addresses
     
@@ -43,17 +43,19 @@ def scan_range(universe, start_addr, end_addr, test_value=255, duration=0.3):
         start_addr: First address to scan
         end_addr: Last address to scan
         test_value: Value to send to each address
-        duration: How long to hold each address
+        duration: How long to hold each address (default 2s for device delays)
     """
     print(f"\nScanning addresses {start_addr} to {end_addr}...")
     print(f"Sending value {test_value} to each address for {duration}s")
     print("Watch for device responses (lights turning on, smoke output, etc.)")
+    print(f"⏱️  Total scan time: ~{(end_addr - start_addr + 1) * duration:.0f} seconds")
     print()
     input("Press Enter to start scan...")
     print()
     
     for addr in range(start_addr, end_addr + 1):
-        print(f"\rTesting address: {addr:3d}/{end_addr}  ", end='', flush=True)
+        elapsed = (addr - start_addr) * duration
+        print(f"\rTesting address: {addr:3d}/{end_addr}  ({elapsed:.0f}s elapsed)  ", end='', flush=True)
         scan_address(universe, addr, test_value, duration)
     
     print("\n\n✓ Scan complete!")
@@ -123,13 +125,14 @@ def print_menu():
     print("DMX Address Scanner Menu")
     print("=" * 60)
     print("\nScanning Options:")
-    print("  1 - Quick scan (addresses 1-30)")
-    print("  2 - Full scan (addresses 1-100)")
-    print("  3 - Custom range scan")
-    print("  4 - Pulse specific address (on/off cycles)")
-    print("  5 - Ramp specific address (0-255 gradual)")
-    print("  6 - Set address to specific value")
-    print("  7 - Clear all channels (set all to 0)")
+    print("  1 - Quick scan (addresses 1-30, 2s hold)")
+    print("  2 - Extended scan (addresses 1-100, 2s hold)")
+    print("  3 - Full universe scan (addresses 1-512, 2s hold) ~17 min")
+    print("  4 - Custom range scan (configurable hold time)")
+    print("  5 - Pulse specific address (on/off cycles)")
+    print("  6 - Ramp specific address (0-255 gradual)")
+    print("  7 - Set address to specific value")
+    print("  8 - Clear all channels (set all to 0)")
     print("  q - Quit")
     print()
 
@@ -169,23 +172,30 @@ def main():
                 break
             
             elif user_input == '1':
-                scan_range(universe, 1, 30, test_value=255, duration=0.3)
+                scan_range(universe, 1, 30, test_value=255, duration=2.0)
             
             elif user_input == '2':
-                scan_range(universe, 1, 100, test_value=255, duration=0.3)
+                scan_range(universe, 1, 100, test_value=255, duration=2.0)
             
             elif user_input == '3':
+                print("\n⚠️  Full universe scan will take ~17 minutes (512 addresses × 2s)")
+                confirm = input("Continue? (y/n): ").strip().lower()
+                if confirm == 'y':
+                    scan_range(universe, 1, 512, test_value=255, duration=2.0)
+            
+            elif user_input == '4':
                 try:
                     start = int(input("Start address (1-512): "))
                     end = int(input("End address (1-512): "))
+                    duration = float(input("Hold time per address in seconds (default 2.0): ") or "2.0")
                     if 1 <= start <= 512 and 1 <= end <= 512 and start <= end:
-                        scan_range(universe, start, end, test_value=255, duration=0.3)
+                        scan_range(universe, start, end, test_value=255, duration=duration)
                     else:
                         print("❌ Invalid range")
                 except ValueError:
                     print("❌ Invalid input")
             
-            elif user_input == '4':
+            elif user_input == '5':
                 try:
                     addr = int(input("Address to pulse (1-512): "))
                     if 1 <= addr <= 512:
@@ -196,7 +206,7 @@ def main():
                 except ValueError:
                     print("❌ Invalid input")
             
-            elif user_input == '5':
+            elif user_input == '6':
                 try:
                     addr = int(input("Address to ramp (1-512): "))
                     if 1 <= addr <= 512:
@@ -207,7 +217,7 @@ def main():
                 except ValueError:
                     print("❌ Invalid input")
             
-            elif user_input == '6':
+            elif user_input == '7':
                 try:
                     addr = int(input("Address (1-512): "))
                     value = int(input("Value (0-255): "))
@@ -220,7 +230,7 @@ def main():
                 except ValueError:
                     print("❌ Invalid input")
             
-            elif user_input == '7':
+            elif user_input == '8':
                 print("Clearing all channels...")
                 universe.clear()
                 print("✓ All channels set to 0")

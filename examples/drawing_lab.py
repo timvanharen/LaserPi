@@ -40,6 +40,7 @@ import time
 import os
 import math
 import threading
+import json
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
@@ -49,6 +50,54 @@ from laserpi.config import (
     LASER1_ADDRESS, LASER2_ADDRESS, SERIAL_PORT,
     DMX_BAUD, DMX_CHANNEL_COUNT, DMX_BREAK_TIME_US, DMX_MAB_TIME_US
 )
+
+# ──────────────────────────────────────────────────────
+#  PRESET SYSTEM
+# ──────────────────────────────────────────────────────
+
+PRESETS_FILE = os.path.join(os.path.dirname(__file__), 'visual_presets.json')
+
+# Default presets (saved on first run)
+DEFAULT_PRESETS = {
+    "Two Eyes": {
+        "description": "Two circles/triangles alternating - looks like blinking eyes",
+        "hold_ms": 35,
+        "scan_speed": 5,
+        "dynamic_speed": 1,
+        "zoom": 255,
+        "laser1": {
+            "mode": "STATIC_PATTERN",
+            "pattern": 1,  # Circle (or 120 for triangle, 225 for spirals)
+        },
+        "laser2": {
+            "mode": "DYNAMIC_PATTERN",
+            "pattern": 235,  # Flapping bird (smile to frown)
+        }
+    }
+}
+
+def load_presets():
+    """Load visual presets from JSON file."""
+    if os.path.exists(PRESETS_FILE):
+        try:
+            with open(PRESETS_FILE, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Warning: Could not load presets: {e}")
+            return DEFAULT_PRESETS.copy()
+    else:
+        # First run - save defaults
+        save_presets(DEFAULT_PRESETS)
+        return DEFAULT_PRESETS.copy()
+
+def save_presets(presets):
+    """Save visual presets to JSON file."""
+    try:
+        with open(PRESETS_FILE, 'w') as f:
+            json.dump(presets, f, indent=2)
+        print(f"✓ Saved presets to {PRESETS_FILE}")
+    except Exception as e:
+        print(f"Error saving presets: {e}")
 
 
 # ──────────────────────────────────────────────────────
@@ -171,10 +220,12 @@ def mode_rate_finder():
         'zoom': 255,         # Max zoom
         'scan_speed': 1,     # Slowest scan = sharpest
         'dyn_speed': 255,    # Max pattern/dynamic speed
+        'laser_mode': MK2Mode.STATIC_PATTERN,  # or DYNAMIC_PATTERN
     }
 
     def apply_settings():
         """Apply current pattern/zoom/speed settings to the laser."""
+        laser.set_mode(state['laser_mode'])
         laser.set_pattern(state['pattern'])
         laser.set_zoom(state['zoom'])
         laser.set_scanning_speed(state['scan_speed'])
@@ -204,7 +255,7 @@ def mode_rate_finder():
         driver.start(universe)
         time.sleep(0.5)
 
-        laser.set_mode(MK2Mode.STATIC_PATTERN)
+        laser.set_mode(state['laser_mode'])
         laser.set_pattern(state['pattern'])
         laser.set_zoom(state['zoom'])
         laser.center()
@@ -217,18 +268,22 @@ def mode_rate_finder():
         print("✓ Laser ready!")
         print()
         print("Controls:")
-        print("  faster    Decrease hold time (press repeatedly)")
-        print("  slower    Increase hold time")
-        print("  [number]  Set hold time in ms directly (e.g. '25')")
-        print("  pos       Toggle position mode (left↔right)")
-        print("  pat       Toggle pattern mode (h-line↔v-line)")
-        print("  p [n]     Set pattern number (e.g. 'p 145')")
-        print("  z [n]     Set zoom 0-255 (e.g. 'z 255')")
-        print("  ss [n]    Set scan speed 0-255 (e.g. 'ss 1')")
-        print("  ds [n]    Set dynamic speed 0-255 (e.g. 'ds 255')")
-        print("  q         Quit")
+        print("  faster       Decrease hold time (press repeatedly)")
+        print("  slower       Increase hold time")
+        print("  [number]     Set hold time in ms directly (e.g. '25')")
+        print("  pos          Toggle position mode (left↔right)")
+        print("  pat          Toggle pattern mode (h-line↔v-line)")
+        print("  p [n]        Set pattern number (e.g. 'p 145')")
+        print("  z [n]        Set zoom 0-255 (e.g. 'z 255')")
+        print("  ss [n]       Set scan speed 0-255 (e.g. 'ss 1')")
+        print("  ds [n]       Set dynamic speed 0-255 (e.g. 'ds 255')")
+        print("  static       Switch to STATIC_PATTERN mode")
+        print("  dynamic      Switch to DYNAMIC_PATTERN mode")
+        print("  save [name]  Save current settings as preset")
+        print("  q            Quit")
         print()
-        print(f"Pattern: {state['pattern']}  Zoom: {state['zoom']}  "
+        mode_name = "STATIC" if state['laser_mode'] == MK2Mode.STATIC_PATTERN else "DYNAMIC"
+        print(f"Mode: {mode_name}  Pattern: {state['pattern']}  Zoom: {state['zoom']}  "
               f"Scan: {state['scan_speed']}  DynSpeed: {state['dyn_speed']}")
         print("Start: Do you see TWO shapes alternating?")
         print(f"Hold time: {state['hold_ms']:.0f}ms per state "
@@ -291,6 +346,32 @@ def mode_rate_finder():
                     print(f"Dynamic speed: {state['dyn_speed']}")
                 except (ValueError, IndexError):
                     print("Usage: ds [0-255]")
+            elif cmd == 'static':
+                state['laser_mode'] = MK2Mode.STATIC_PATTERN
+                apply_settings()
+                print("Mode: STATIC_PATTERN")
+            elif cmd == 'dynamic':
+                state['laser_mode'] = MK2Mode.DYNAMIC_PATTERN
+                apply_settings()
+                print("Mode: DYNAMIC_PATTERN")
+            elif cmd.startswith('save '):
+                preset_name = cmd[5:].strip()
+                if preset_name:
+                    presets = load_presets()
+                    mode_name = "STATIC_PATTERN" if state['laser_mode'] == MK2Mode.STATIC_PATTERN else "DYNAMIC_PATTERN"
+                    presets[preset_name] = {
+                        "description": "User-saved preset",
+                        "hold_ms": state['hold_ms'],
+                        "scan_speed": state['scan_speed'],
+                        "dynamic_speed": state['dyn_speed'],
+                        "zoom": state['zoom'],
+                        "laser_mode": mode_name,
+                        "pattern": state['pattern'],
+                    }
+                    save_presets(presets)
+                    print(f"✓ Saved preset '{preset_name}'")
+                else:
+                    print("Usage: save [preset_name]")
             else:
                 try:
                     val = float(cmd)
@@ -365,12 +446,22 @@ TRI_SEGMENTS = [
     (70, 180, 130, 30),   # Right side
 ]
 
+# QW logo simplified: Using special double-line patterns
+# Pattern 150 = Square, Pattern 90 = Double horizontal, Pattern 100 = Double vertical
+QW_SIMPLIFIED = [
+    (150,  75, 110, 60),   # Q: Square (left side)
+    (90,  135, 175, 80),   # Base: Double horizontal lines (bottom, spans both letters)
+    (100, 175, 115, 55),   # W: Double vertical lines (left-center legs)
+    (100, 205, 115, 55),   # W: Double vertical lines (right-center legs)
+]
+
 COMPOSE_SHAPES = {
     '1': ("Rectangle", RECT_SEGMENTS),
     '2': ("Letter Q", Q_SEGMENTS),
     '3': ("Letter W", W_SEGMENTS),
     '4': ("Cross +", CROSS_SEGMENTS),
     '5': ("Triangle", TRI_SEGMENTS),
+    '6': ("QW Simplified", QW_SIMPLIFIED),
 }
 
 
@@ -435,7 +526,8 @@ def mode_line_composer():
     state = {
         'running': True,
         'segments': CROSS_SEGMENTS,  # Start with cross (only 2 segments)
-        'hold_ms': 30.0,  # ms to hold each segment (slightly > 1 DMX frame)
+        'hold_ms': 35.0,  # ms to hold each segment (user-discovered optimal)
+        'scan_speed': 5,  # User-discovered optimal for sharp dots
         'x_off': 0,
         'y_off': 0,
         'zoom_offset': 0,
@@ -448,7 +540,7 @@ def mode_line_composer():
         laser.set_mode(MK2Mode.STATIC_PATTERN)
         laser.set_color(255)
         laser.set_color_segment(0)
-        laser.set_scanning_speed(255)
+        laser.set_scanning_speed(state['scan_speed'])
         laser.center()
         time.sleep(0.3)
 
@@ -461,14 +553,15 @@ def mode_line_composer():
         print("\nControls:")
         print("  w/a/s/d     Move")
         print("  +/-         Zoom offset")
-        print("  hold [ms]   Set hold time per segment (default: 30)")
+        print("  hold [ms]   Set hold time per segment (default: 35)")
+        print("  ss [n]      Set scan speed 0-255 (default: 5)")
         print("  status      Current settings")
         print("  q           Quit\n")
 
         n = len(state['segments'])
         each_hz = 1000 / (state['hold_ms'] * n)
         print(f"Starting with Cross + (2 segments, {state['hold_ms']:.0f}ms hold, "
-              f"~{each_hz:.0f}Hz per segment)\n")
+              f"scan speed {state['scan_speed']}, ~{each_hz:.0f}Hz per segment)\n")
 
         thread = threading.Thread(
             target=compose_loop_synced,
@@ -517,11 +610,19 @@ def mode_line_composer():
                           f"(~{each_hz:.0f}Hz per segment with {n} segments)")
                 except ValueError:
                     print("Usage: hold [ms]")
+            elif cmd.startswith('ss '):
+                try:
+                    val = int(cmd.split()[1])
+                    state['scan_speed'] = max(0, min(255, val))
+                    laser.set_scanning_speed(state['scan_speed'])
+                    print(f"Scan speed: {state['scan_speed']}")
+                except (ValueError, IndexError):
+                    print("Usage: ss [0-255]")
             elif cmd == 'status':
                 n = len(state['segments'])
                 cycle_ms = n * state['hold_ms']
                 each_hz = 1000 / (state['hold_ms'] * max(1, n))
-                print(f"  Hold: {state['hold_ms']:.0f}ms  Segments: {n}")
+                print(f"  Hold: {state['hold_ms']:.0f}ms  Segments: {n}  Scan speed: {state['scan_speed']}")
                 print(f"  Cycle: {cycle_ms:.0f}ms  ~{each_hz:.0f}Hz per segment")
                 print(f"  Offset: ({state['x_off']}, {state['y_off']})  "
                       f"Zoom+: {state['zoom_offset']}")
