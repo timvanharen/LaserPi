@@ -26,8 +26,9 @@ All modes in this lab are designed around that constraint.
     Both lasers show persistent elements, PLUS time-share additional
     segments. 2 solid + N flickering = more complex shapes.
 
-  Mode 6: PATTERN STROBE
-    Rapid color/mode toggling to test pattern interruption.
+  Mode 6: PATTERN STROBE DRAW
+    Draw shapes by blanking between repositions. OFF→move→ON→OFF
+    creates clean lines via persistence of vision.
 
   Mode 7: GALVO SIGNAL PROBE
     For hardware hacking: identifies galvo driver signals when you
@@ -1163,42 +1164,78 @@ def mode_dual_compose():
 
 
 # ──────────────────────────────────────────────────────
-#  MODE 6: PATTERN STROBE
+#  MODE 6: PATTERN STROBE DRAW
 # ──────────────────────────────────────────────────────
 
 def mode_pattern_strobe():
-    """Rapid color/mode toggling to interrupt patterns."""
+    """Draw shapes by rapidly interrupting and repositioning patterns."""
     print("\n" + "=" * 60)
-    print("MODE 6: PATTERN STROBE")
+    print("MODE 6: PATTERN STROBE DRAW")
     print("=" * 60)
-    print("Toggle pattern visibility rapidly via color/mode switching.\n")
+    print()
+    print("Draws shapes by rapidly cycling through segments, turning the")
+    print("pattern OFF between each move. This gives the galvos time to")
+    print("reposition while dark, then flashes the pattern at the new spot.")
+    print()
+    print("OFF→move→ON→OFF→move→ON... = clean line segments via POV.\n")
 
     universe = DMXUniverse()
     driver = DMXDriver()
     laser = MK2(universe, LASER1_ADDRESS, name="Laser 1")
 
-    state = {
-        'running': True,
-        'strobe_method': 'color',
-        'on_time': 0.005,
-        'off_time': 0.020,
-        'pattern': 0,
-        'zoom': 128,
+    STROBE_SHAPES = {
+        '1': ("Rectangle", RECT_SEGMENTS),
+        '2': ("Letter Q", Q_SEGMENTS),
+        '3': ("Letter W", W_SEGMENTS),
+        '4': ("Cross +", CROSS_SEGMENTS),
+        '5': ("Triangle", TRI_SEGMENTS),
+        '6': ("QW Simplified", QW_SIMPLIFIED),
     }
 
-    def strobe_loop():
+    state = {
+        'running': True,
+        'strobing': False,
+        'segments': QW_SIMPLIFIED,
+        'on_ms': 35.0,       # How long pattern is visible at each position
+        'off_ms': 5.0,        # Blanking time for galvo to reposition
+        'scan_speed': 5,      # Scan speed (lower = sharper)
+        'zoom_offset': 0,
+        'x_off': 0,
+        'y_off': 0,
+    }
+
+    def strobe_draw_loop():
+        """Cycle through segments: OFF→reposition→ON→hold→OFF→reposition..."""
         while state['running']:
-            method = state['strobe_method']
-            if method == 'color':
-                laser.set_color(255)
-                time.sleep(state['on_time'])
+            if not state['strobing']:
+                time.sleep(0.05)
+                continue
+
+            segments = state['segments']
+            on_time = state['on_ms'] / 1000.0
+            off_time = state['off_ms'] / 1000.0
+
+            for pat, x, y, zoom in segments:
+                if not state['strobing'] or not state['running']:
+                    break
+                if state['segments'] is not segments:
+                    break  # Shape changed
+
+                # BLANK: turn off while repositioning
                 laser.set_color(0)
-                time.sleep(state['off_time'])
-            elif method == 'mode':
-                laser.set_mode(MK2Mode.STATIC_PATTERN)
-                time.sleep(state['on_time'])
-                laser.set_mode(MK2Mode.OFF)
-                time.sleep(state['off_time'])
+                time.sleep(off_time)
+
+                # REPOSITION while dark
+                laser.set_pattern(pat)
+                laser.set_zoom(max(0, min(255, zoom + state['zoom_offset'])))
+                laser.set_position(
+                    max(11, min(255, x + state['x_off'])),
+                    max(11, min(255, y + state['y_off']))
+                )
+
+                # FLASH: show pattern at new position
+                laser.set_color(255)
+                time.sleep(on_time)
 
     try:
         driver.start(universe)
@@ -1210,22 +1247,34 @@ def mode_pattern_strobe():
         laser.center()
         laser.set_color(255)
         laser.set_color_segment(0)
-        laser.set_scanning_speed(128)
+        laser.set_scanning_speed(state['scan_speed'])
+        laser.set_dynamic_speed(255)
         time.sleep(0.3)
 
         print("✓ Laser ready!")
-        print("\nControls:")
-        print("  p [num]    Pattern (0-255)")
-        print("  z [num]    Zoom (0-255)")
-        print("  c          Method: color (255↔0)")
-        print("  m          Method: mode (STATIC↔OFF)")
-        print("  on [ms]    ON time")
-        print("  off [ms]   OFF time")
-        print("  start/stop Toggle strobing")
-        print("  q          Quit\n")
+        print("\nShapes:")
+        for k, (name, segs) in STROBE_SHAPES.items():
+            n = len(segs)
+            cycle_ms = n * (state['on_ms'] + state['off_ms'])
+            print(f"  {k} - {name:15s} ({n} segs, ~{cycle_ms:.0f}ms/cycle)")
 
-        strobing = False
-        thread = None
+        print(f"\nCurrent: QW Simplified ({len(state['segments'])} segments)")
+        print(f"ON: {state['on_ms']:.0f}ms  OFF: {state['off_ms']:.0f}ms  "
+              f"Scan speed: {state['scan_speed']}")
+
+        print("\nControls:")
+        print("  start/stop    Toggle strobe drawing")
+        print("  on [ms]       ON time per segment (default 35)")
+        print("  off [ms]      OFF/blank time for reposition (default 5)")
+        print("  ss [val]      Scan speed 0-255 (default 5)")
+        print("  ds [val]      Dynamic speed 0-255")
+        print("  w/a/s/d       Move shape")
+        print("  +/-           Zoom offset")
+        print("  status        Current settings")
+        print("  q             Quit\n")
+
+        thread = threading.Thread(target=strobe_draw_loop, daemon=True)
+        thread.start()
 
         while True:
             try:
@@ -1235,61 +1284,92 @@ def mode_pattern_strobe():
 
             if cmd == 'q':
                 break
+            elif cmd in STROBE_SHAPES:
+                name, segs = STROBE_SHAPES[cmd]
+                state['segments'] = segs
+                n = len(segs)
+                cycle_ms = n * (state['on_ms'] + state['off_ms'])
+                print(f"Shape: {name} ({n} segs, ~{cycle_ms:.0f}ms/cycle, "
+                      f"~{1000/cycle_ms:.0f} shapes/sec)")
             elif cmd == 'start':
-                if not strobing:
-                    state['running'] = True
-                    thread = threading.Thread(target=strobe_loop, daemon=True)
-                    thread.start()
-                    strobing = True
-                    print("Strobing started")
+                state['strobing'] = True
+                n = len(state['segments'])
+                cycle_ms = n * (state['on_ms'] + state['off_ms'])
+                print(f"Strobe drawing ON  (ON:{state['on_ms']:.0f}ms "
+                      f"OFF:{state['off_ms']:.0f}ms, ~{1000/cycle_ms:.0f} shapes/sec)")
             elif cmd == 'stop':
-                state['running'] = False
-                if thread:
-                    thread.join(timeout=1)
-                strobing = False
-                laser.set_mode(MK2Mode.STATIC_PATTERN)
+                state['strobing'] = False
                 laser.set_color(255)
-                laser.set_zoom(state['zoom'])
-                print("Stopped")
-            elif cmd == 'c':
-                state['strobe_method'] = 'color'
-                print("Method: color")
-            elif cmd == 'm':
-                state['strobe_method'] = 'mode'
-                print("Method: mode")
+                laser.set_mode(MK2Mode.STATIC_PATTERN)
+                print("Strobe drawing OFF")
+            elif cmd.startswith('on '):
+                try:
+                    val = float(cmd.split()[1])
+                    state['on_ms'] = max(1, min(200, val))
+                    print(f"ON time: {state['on_ms']:.0f}ms")
+                except (ValueError, IndexError):
+                    print("Usage: on [ms]")
+            elif cmd.startswith('off '):
+                try:
+                    val = float(cmd.split()[1])
+                    state['off_ms'] = max(1, min(200, val))
+                    print(f"OFF time: {state['off_ms']:.0f}ms")
+                except (ValueError, IndexError):
+                    print("Usage: off [ms]")
+            elif cmd.startswith('ss '):
+                try:
+                    val = int(cmd.split()[1])
+                    state['scan_speed'] = max(0, min(255, val))
+                    laser.set_scanning_speed(state['scan_speed'])
+                    print(f"Scan speed: {state['scan_speed']}")
+                except (ValueError, IndexError):
+                    print("Usage: ss [0-255]")
+            elif cmd.startswith('ds '):
+                try:
+                    val = int(cmd.split()[1])
+                    laser.set_dynamic_speed(max(0, min(255, val)))
+                    print(f"Dynamic speed: {val}")
+                except (ValueError, IndexError):
+                    print("Usage: ds [0-255]")
             elif cmd.startswith('p '):
                 try:
                     val = int(cmd.split()[1])
-                    state['pattern'] = max(0, min(255, val))
-                    laser.set_pattern(state['pattern'])
-                    print(f"Pattern: {state['pattern']}")
-                except ValueError:
-                    pass
-            elif cmd.startswith('z '):
-                try:
-                    val = int(cmd.split()[1])
-                    state['zoom'] = max(0, min(255, val))
-                    laser.set_zoom(state['zoom'])
-                    print(f"Zoom: {state['zoom']}")
-                except ValueError:
-                    pass
-            elif cmd.startswith('on '):
-                try:
-                    state['on_time'] = float(cmd.split()[1]) / 1000
-                    print(f"ON: {state['on_time']*1000:.1f}ms")
-                except ValueError:
-                    pass
-            elif cmd.startswith('off '):
-                try:
-                    state['off_time'] = float(cmd.split()[1]) / 1000
-                    print(f"OFF: {state['off_time']*1000:.1f}ms")
-                except ValueError:
-                    pass
+                    laser.set_pattern(max(0, min(255, val)))
+                    print(f"Pattern: {val} (applies when not strobing)")
+                except (ValueError, IndexError):
+                    print("Usage: p [0-255]")
+            elif cmd == 'w':
+                state['y_off'] = max(-80, state['y_off'] - 10)
+                print(f"Position offset: ({state['x_off']}, {state['y_off']})")
+            elif cmd == 's':
+                state['y_off'] = min(80, state['y_off'] + 10)
+                print(f"Position offset: ({state['x_off']}, {state['y_off']})")
+            elif cmd == 'a':
+                state['x_off'] = max(-80, state['x_off'] - 10)
+                print(f"Position offset: ({state['x_off']}, {state['y_off']})")
+            elif cmd == 'd':
+                state['x_off'] = min(80, state['x_off'] + 10)
+                print(f"Position offset: ({state['x_off']}, {state['y_off']})")
+            elif cmd in ('+', '='):
+                state['zoom_offset'] = min(100, state['zoom_offset'] + 5)
+                print(f"Zoom offset: {state['zoom_offset']}")
+            elif cmd == '-':
+                state['zoom_offset'] = max(-100, state['zoom_offset'] - 5)
+                print(f"Zoom offset: {state['zoom_offset']}")
+            elif cmd == 'status':
+                n = len(state['segments'])
+                cycle_ms = n * (state['on_ms'] + state['off_ms'])
+                print(f"  Strobing: {'ON' if state['strobing'] else 'OFF'}")
+                print(f"  Segments: {n}  ON: {state['on_ms']:.0f}ms  OFF: {state['off_ms']:.0f}ms")
+                print(f"  Cycle: {cycle_ms:.0f}ms  ~{1000/cycle_ms:.0f} shapes/sec")
+                print(f"  Scan speed: {state['scan_speed']}")
+                print(f"  Offset: ({state['x_off']}, {state['y_off']})  Zoom+: {state['zoom_offset']}")
 
     except KeyboardInterrupt:
         print("\nInterrupted")
     finally:
         state['running'] = False
+        state['strobing'] = False
         time.sleep(0.05)
         laser.off()
         time.sleep(0.3)
