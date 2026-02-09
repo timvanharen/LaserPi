@@ -106,6 +106,14 @@ def load_presets(mode=None):
         try:
             with open(PRESETS_FILE, 'r') as f:
                 all_presets = json.load(f)
+            # Merge with defaults to ensure new default presets are available
+            needs_save = False
+            for mode_key, mode_defaults in DEFAULT_PRESETS.items():
+                if mode_key not in all_presets:
+                    all_presets[mode_key] = mode_defaults.copy()
+                    needs_save = True
+            if needs_save:
+                save_presets(all_presets, silent=True)
         except Exception as e:
             print(f"Warning: Could not load presets: {e}")
             all_presets = DEFAULT_PRESETS.copy()
@@ -118,12 +126,13 @@ def load_presets(mode=None):
         return all_presets.get(mode, {})
     return all_presets
 
-def save_presets(presets):
+def save_presets(presets, silent=False):
     """Save visual presets to JSON file."""
     try:
         with open(PRESETS_FILE, 'w') as f:
             json.dump(presets, f, indent=2)
-        print(f"✓ Saved presets to {PRESETS_FILE}")
+        if not silent:
+            print(f"✓ Saved presets to {PRESETS_FILE}")
     except Exception as e:
         print(f"Error saving presets: {e}")
 
