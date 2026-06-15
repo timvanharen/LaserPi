@@ -1,0 +1,22 @@
+# Systemd service file for LaserPi auto-start
+# Copy this file to: /etc/systemd/system/laserpi.service
+
+[Unit]
+Description=LaserPi Startup Script
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/LaserPi
+ExecStart=/usr/bin/python3 /home/pi/LaserPi/startup_script.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Environment variables (if needed)
+# Environment="PYTHONPATH=/home/pi/LaserPi/src"
+
+[Install]
+WantedBy=multi-user.target
