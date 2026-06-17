@@ -1,25 +1,208 @@
 #!/usr/bin/env python3
 """
-Boundary probe — detect mechanical limits of the galvo mirror assembly.
+Interactive boundary calibration for galvo mirror assembly.
 
-Two modes:
-  A) Manual probing — slowly moves each axis, user confirms when limit is hit
-  B) StallGuard (if TMC2209 UART available) — automatic stall detection
-
-Saves calibration to galvo_calibration.json.
+Flow per axis:
+  1. Jog motor to the + mechanical limit using keyboard commands
+  2. Confirm — this sets the + boundary
+  3. Motor drifts slowly toward - direction; press ENTER to stop
+  4. Fine-tune with small jog steps
+  5. Confirm — this sets the - boundary
+  6. Saves calibration to galvo_calibration.json
 
 Run: python3 examples/boundary_probe.py
 """
 import sys
 import os
 import time
-import json
+import select
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 import pigpio
 from direct_laser.motor.stepper import Stepper
 from direct_laser import config
+
+
+def check_keypress():
+    """Non-blocking stdin check. Returns stripped line or None."""
+    if select.select([sys.stdin], [], [], 0)[0]:
+        return sys.stdin.readline().strip()
+    return None
+
+
+def jog_interface(motor, prompt):
+    """
+    Interactive jog loop. User moves the motor to a limit, then types 'ok'.
+
+    Commands:
+      +         → +10 µsteps
+      ++        → +100 µsteps
+      <N>+      → +N µsteps  (e.g. 50+)
+      -         → -10 µsteps
+      --        → -100 µsteps
+      <N>-      → -N µsteps
+      ok/ENTER  → confirm current position and exit
+    """
+    print(f"\n  Jog commands:  +/- = ±10    ++/-- = ±100    <N>+/<N>- = ±N steps")
+    print(f"  Type 'ok' or press ENTER when at the limit.\n")
+
+    while True:
+        cmd = input(f"  {prompt}  pos={motor.position:+6d}  > ").strip().lower()
+
+        if cmd in ('ok', '', 'done'):
+            return motor.position
+        elif cmd == '+':
+            motor.step(Stepper.POSITIVE, 10)
+        elif cmd == '++':
+            motor.step(Stepper.POSITIVE, 100)
+        elif cmd == '-':
+            motor.step(Stepper.NEGATIVE, 10)
+        elif cmd == '--':
+            motor.step(Stepper.NEGATIVE, 100)
+        elif cmd.endswith('+') and cmd[:-1].isdigit():
+            motor.step(Stepper.POSITIVE, int(cmd[:-1]))
+        elif cmd.endswith('-') and cmd[:-1].isdigit():
+            motor.step(Stepper.NEGATIVE, int(cmd[:-1]))
+        else:
+            print(f"    Unknown: '{cmd}' — use +/- or 'ok'")
+
+
+def drift_to_limit(motor, name):
+    """
+    Move motor slowly toward - direction until ENTER is pressed,
+    then allow fine-tuning with small jog steps.
+    Returns confirmed - limit position.
+    """
+    DRIFT_SPEED    = 150   # µsteps/s — slow enough to react in time
+    DRIFT_BATCH    = 3     # µsteps per tick (keep small for responsiveness)
+
+    motor.set_speed(DRIFT_SPEED)
+
+    print(f"\n  Motor will drift slowly toward - direction.")
+    print(f"  Press ENTER at any time to stop.")
+    print(f"  Starting in 2 seconds...")
+    time.sleep(2)
+
+    # Flush any buffered input
+    while check_keypress() is not None:
+        pass
+
+    print(f"  Drifting...  (ENTER to stop)\n")
+
+    while True:
+        motor.step(Stepper.NEGATIVE, DRIFT_BATCH)
+        print(f"\r    pos={motor.position:+6d}  (ENTER to stop)", end='', flush=True)
+        if check_keypress() is not None:
+            print()
+            break
+
+    print(f"\n  Stopped at {motor.position}.")
+    print(f"  Fine-tune to the exact - limit, then 'ok' to confirm.")
+
+    motor.set_speed(150)
+    return jog_interface(motor, f"{name}-limit")
+
+
+def calibrate_axis(pi, step_pin, dir_pin, en_pin, name):
+    """Full calibration for one axis. Returns (min_pos, max_pos) with safety margins."""
+    motor = Stepper(pi, step_pin, dir_pin, en_pin, name=name)
+    motor.enable()
+    motor.set_speed(300)
+
+    print(f"\n{'='*52}")
+    print(f"  Calibrating {name} axis")
+    print(f"{'='*52}")
+
+    # Step 1: find + limit
+    print(f"\nStep 1 — Jog to the + mechanical limit (mirror fully deflected one way).")
+    max_pos = jog_interface(motor, f"{name}+limit")
+    print(f"  ✓  {name}+ limit: {max_pos}")
+
+    # Step 2: drift to - limit
+    print(f"\nStep 2 — Motor will drift toward - limit.")
+    min_pos = drift_to_limit(motor, name)
+    print(f"  ✓  {name}- limit: {min_pos}")
+
+    if min_pos >= max_pos:
+        print(f"  WARNING: min ({min_pos}) >= max ({max_pos}). Swap direction or redo.")
+        min_pos, max_pos = max_pos, min_pos
+
+    # Apply 5% safety margins
+    span   = max_pos - min_pos
+    margin = int(span * 0.05)
+    safe_min = min_pos + margin
+    safe_max = max_pos - margin
+
+    print(f"\n  Raw range:   {min_pos} to {max_pos}  ({span} µsteps)")
+    print(f"  Safe range:  {safe_min} to {safe_max}  ({safe_max - safe_min} µsteps, 5% margins)")
+
+    # Return to center
+    center = (safe_min + safe_max) // 2
+    print(f"  Returning to center ({center})...")
+    motor.set_speed(1000)
+    motor.move_to(center)
+    motor.disable()
+
+    return safe_min, safe_max
+
+
+def main():
+    pi = pigpio.pi()
+    if not pi.connected:
+        print("ERROR: pigpiod not running.  Run: sudo systemctl start pigpiod")
+        sys.exit(1)
+
+    print("\n=== Galvo Boundary Calibration ===")
+    print("Finds the mechanical limits of each mirror axis.")
+    print("SAFETY: Keep the beam path clear during calibration.\n")
+
+    results = {}
+
+    try:
+        for name, step, dir_, en in [
+            ('X', config.MOTOR_X_STEP, config.MOTOR_X_DIR, config.MOTOR_X_EN),
+            ('Y', config.MOTOR_Y_STEP, config.MOTOR_Y_DIR, config.MOTOR_Y_EN),
+        ]:
+            ans = input(f"Calibrate {name} axis? [Y/n]: ").strip().lower()
+            if ans == 'n':
+                print(f"  Skipping {name}.")
+                continue
+
+            safe_min, safe_max = calibrate_axis(pi, step, dir_, en, name)
+            results[name] = (safe_min, safe_max)
+            print(f"\n  {name}: {safe_min} to {safe_max}  ✓\n")
+
+        if not results:
+            print("No axes calibrated. Nothing saved.")
+            return
+
+        # Build calibration dict, keeping existing values for skipped axes
+        existing = config.load_calibration()
+        cal = {
+            'x_min': results['X'][0] if 'X' in results else existing.get('x_min', -1600),
+            'x_max': results['X'][1] if 'X' in results else existing.get('x_max',  1600),
+            'y_min': results['Y'][0] if 'Y' in results else existing.get('y_min', -1600),
+            'y_max': results['Y'][1] if 'Y' in results else existing.get('y_max',  1600),
+        }
+
+        config.save_calibration(cal)
+        print(f"\n✓ Saved to galvo_calibration.json")
+        print(f"  X: {cal['x_min']} → {cal['x_max']}")
+        print(f"  Y: {cal['y_min']} → {cal['y_max']}")
+        print("\n=== Done ===")
+
+    except KeyboardInterrupt:
+        print("\n\nInterrupted.")
+    finally:
+        for en_pin in (config.MOTOR_X_EN, config.MOTOR_Y_EN):
+            pi.write(en_pin, 1)  # Disable both motors
+        pi.stop()
+
+
+if __name__ == '__main__':
+    main()
+
 
 
 def manual_probe_axis(pi, step_pin, dir_pin, en_pin, name):

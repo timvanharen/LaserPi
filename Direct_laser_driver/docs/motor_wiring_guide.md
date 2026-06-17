@@ -11,34 +11,35 @@ The ATD5833 is a breakout board for the Trinamic TMC2209 stepper driver IC. It f
     EN  ──►│ 1             16│◄── VM (motor supply, 12V)
     MS1 ──►│ 2             15│◄── GND
     MS2 ──►│ 3             14│◄── 2B (coil B-)
-   PDN  ──►│ 4             13│◄── 2A (coil B+)
-   CLK  ──►│ 5             12│◄── 1A (coil A+)
-  STEP  ──►│ 6             11│◄── 1B (coil A-)
-   DIR  ──►│ 7             10│◄── VCC_IO (logic supply, 3.3V)
-   GND  ──►│ 8              9│◄── DIAG
+    PDN ──►│ 4             13│◄── 2A (coil B+)
+   UART ──►│ 5             12│◄── 1A (coil A+)
+    CLK ──►│ 6             11│◄── 1B (coil A-)
+   STEP ──►│ 7             10│◄── VCC_IO (logic supply, 3.3V)
+    DIR ──►│ 8              9│◄── DIAG
            └─────────────────┘
 ```
 Watch this video: https://www.youtube.com/watch?v=d-u_mzvw_eY
 
-> **Note**: Pin layout may vary by manufacturer. Always verify against **your specific board's** silkscreen markings. Some boards label PDN as "UART" or "PDN_UART".
+> **Note**: This pinout matches the ATD5833 from Simple Robot Store (AliExpress). This board exposes PDN and UART as **separate pins** (pins 4 and 5), unlike some other TMC2209 breakouts that combine them as a single PDN_UART pin. Always verify against your board's silkscreen.
 
 ### Pin Descriptions
 
 | Pin | Name | Function |
 |-----|------|----------|
 | EN | Enable | Active LOW — pull LOW to enable driver, HIGH to disable (high-impedance) |
-| MS1 | Microstep 1 | Microstepping config bit 1 (active when PDN_UART not used for UART) |
+| MS1 | Microstep 1 | Microstepping config bit 1 |
 | MS2 | Microstep 2 | Microstepping config bit 2 |
-| PDN/UART | PDN_UART | UART interface for TMC2209 configuration. Also functions as power-down input when UART not used |
-| CLK | Clock | External clock input (usually tied to GND or left NC if using internal oscillator) |
+| PDN | Power Down | Pull to GND for normal operation (or leave NC). Do NOT use for UART on this board — use the separate UART pin |
+| UART | UART | Single-wire UART interface for TMC2209 configuration (connect to Pi TX via 1kΩ, and Pi RX directly) |
+| CLK | Clock | External clock input — **tie to GND**. TMC2209 uses its internal oscillator when CLK is low |
 | STEP | Step | Rising edge = one microstep. Pulse width minimum: 100 ns |
 | DIR | Direction | HIGH = one direction, LOW = other. Set before STEP pulse |
-| GND | Ground | Common ground (connect to Pi GND and power supply GND) |
-| DIAG | Diagnostics | Output — goes HIGH on StallGuard detection or driver error |
-| VCC_IO | Logic supply | Reference voltage for logic inputs: **connect to 3.3V** from Pi |
-| 1A, 1B | Coil A | Motor coil A outputs (one winding pair) |
-| 2A, 2B | Coil B | Motor coil B outputs (other winding pair) |
-| VM | Motor voltage | Motor power supply: **connect to 12V** |
+| GND | Ground | Common ground (right side, pin 15) |
+| DIAG | Diagnostics | Output — goes HIGH on StallGuard detection or driver error (pin 9) |
+| VCC_IO | Logic supply | Reference voltage for logic inputs: **connect to 3.3V** from Pi (pin 10) |
+| 1A, 1B | Coil A | Motor coil A outputs (pins 12, 11) |
+| 2A, 2B | Coil B | Motor coil B outputs (pins 13, 14) |
+| VM | Motor voltage | Motor power supply: **connect to 12V** (pin 16) |
 
 ## Shangyeng 39BYG101-1 Motor Wiring
 
@@ -121,9 +122,12 @@ Two drivers are needed — one for X axis, one for Y axis:
 ### UART Single-Wire Connection
 
 ```
-Pi GPIO 14 (TX) ──[1kΩ]──┬── ATD5833 PDN_UART pin
+Pi GPIO 14 (TX) ──[1kΩ]──┬── ATD5833 UART pin (pin 5)
                           │
 Pi GPIO 15 (RX) ──────────┘
+
+ATD5833 PDN pin (pin 4) ──── GND  (leave floating or tie to GND)
+ATD5833 CLK pin (pin 6) ──── GND  (internal oscillator)
 ```
 
 The 1kΩ resistor on TX prevents bus contention when the TMC2209 is transmitting responses.

@@ -153,62 +153,70 @@ class Stepper:
 
     def _execute_ramp(self, total_steps, sign):
         """
-        Execute steps with trapezoidal acceleration profile.
+        Execute steps with trapezoidal acceleration profile using DMA waveforms.
 
-        Accelerates from a minimum start speed up to the target speed,
-        cruises, then decelerates symmetrically.
+        pigpio waveforms are timed by the DMA engine, bypassing Linux scheduler
+        jitter entirely. This gives accurate step timing at all speeds.
         """
         if total_steps == 0:
             return
 
         accel = config.ACCELERATION
         target_speed = self._speed
-        min_speed = max(200, target_speed // 20)  # Start at 5% of target or 200
+        min_speed = max(200, target_speed // 20)
 
-        # Calculate ramp steps
-        # v² = v0² + 2*a*s → s = (v² - v0²) / (2*a)
+        # Calculate ramp steps: v² = v0² + 2*a*s → s = (v²-v0²)/(2a)
         ramp_steps = int((target_speed ** 2 - min_speed ** 2) / (2 * accel))
         ramp_steps = min(ramp_steps, total_steps // 2)
 
         cruise_steps = total_steps - 2 * ramp_steps
         if cruise_steps < 0:
-            # Not enough room for full ramp — symmetric partial ramp
             ramp_steps = total_steps // 2
             cruise_steps = total_steps - 2 * ramp_steps
 
         pulse_us = config.STEP_PULSE_WIDTH_US
-        step_count = 0
+        step_bit = 1 << self._step_pin
 
-        # Acceleration phase
+        # Build pulse list — each step = 2 pigpio pulses (HIGH then LOW)
+        pulses = []
+
+        def add_step(delay_us):
+            pulses.append(pigpio.pulse(step_bit, 0, pulse_us))
+            pulses.append(pigpio.pulse(0, step_bit, max(1, delay_us - pulse_us)))
+
         for i in range(ramp_steps):
             speed = min_speed + (target_speed - min_speed) * (i + 1) / ramp_steps
-            delay_us = int(1_000_000 / speed)
-            self._single_step(pulse_us, delay_us)
-            step_count += 1
+            add_step(int(1_000_000 / speed))
 
-        # Cruise phase
         cruise_delay = int(1_000_000 / target_speed)
         for _ in range(cruise_steps):
-            self._single_step(pulse_us, cruise_delay)
-            step_count += 1
+            add_step(cruise_delay)
 
-        # Deceleration phase
         for i in range(ramp_steps):
             speed = target_speed - (target_speed - min_speed) * (i + 1) / ramp_steps
-            speed = max(min_speed, speed)
-            delay_us = int(1_000_000 / speed)
-            self._single_step(pulse_us, delay_us)
-            step_count += 1
+            add_step(int(1_000_000 / max(min_speed, speed)))
 
-        self._position += sign * step_count
+        # Send via DMA in batches (pigpio wave limit is ~12000 pulses = 6000 steps)
+        MAX_PULSES = 10000  # 5000 steps per wave, leaving headroom
+        total_sent = 0
 
-    def _single_step(self, pulse_us, delay_us):
-        """Generate a single step pulse with specified timing."""
-        self._pi.gpio_trigger(self._step_pin, pulse_us, 1)
-        # Wait for the remainder of the step period
-        remaining = delay_us - pulse_us
-        if remaining > 0:
-            time.sleep(remaining / 1_000_000)
+        for i in range(0, len(pulses), MAX_PULSES):
+            batch = pulses[i:i + MAX_PULSES]
+            self._pi.wave_add_generic(batch)
+            wid = self._pi.wave_create()
+            if wid < 0:
+                # Fallback: software timing for this batch
+                for j in range(0, len(batch), 2):
+                    self._pi.gpio_trigger(self._step_pin, pulse_us, 1)
+                    time.sleep(max(0, (batch[j + 1].delay) / 1_000_000))
+            else:
+                self._pi.wave_send_once(wid)
+                while self._pi.wave_tx_busy():
+                    time.sleep(0.001)
+                self._pi.wave_delete(wid)
+            total_sent += len(batch) // 2
+
+        self._position += sign * total_sent
 
     def move_to(self, target):
         """
