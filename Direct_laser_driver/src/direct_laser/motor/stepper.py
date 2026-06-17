@@ -153,10 +153,10 @@ class Stepper:
 
     def _execute_ramp(self, total_steps, sign):
         """
-        Execute steps with trapezoidal acceleration profile using DMA waveforms.
-
-        pigpio waveforms are timed by the DMA engine, bypassing Linux scheduler
-        jitter entirely. This gives accurate step timing at all speeds.
+        Execute steps with trapezoidal acceleration profile.
+        
+        Uses time.sleep() for inter-step delays (matches ESP32 approach).
+        Generates simple HIGH→LOW pulses with stable DIR signal.
         """
         if total_steps == 0:
             return
@@ -175,48 +175,40 @@ class Stepper:
             cruise_steps = total_steps - 2 * ramp_steps
 
         pulse_us = config.STEP_PULSE_WIDTH_US
-        step_bit = 1 << self._step_pin
 
-        # Build pulse list — each step = 2 pigpio pulses (HIGH then LOW)
-        pulses = []
-
-        def add_step(delay_us):
-            pulses.append(pigpio.pulse(step_bit, 0, pulse_us))
-            pulses.append(pigpio.pulse(0, step_bit, max(1, delay_us - pulse_us)))
-
+        # Acceleration phase
         for i in range(ramp_steps):
             speed = min_speed + (target_speed - min_speed) * (i + 1) / ramp_steps
-            add_step(int(1_000_000 / speed))
+            inter_step_us = 1_000_000 / speed
+            self._pulse_step(pulse_us, inter_step_us)
 
-        cruise_delay = int(1_000_000 / target_speed)
+        # Cruise phase
+        cruise_inter_step = 1_000_000 / target_speed
         for _ in range(cruise_steps):
-            add_step(cruise_delay)
+            self._pulse_step(pulse_us, cruise_inter_step)
 
+        # Deceleration phase
         for i in range(ramp_steps):
             speed = target_speed - (target_speed - min_speed) * (i + 1) / ramp_steps
-            add_step(int(1_000_000 / max(min_speed, speed)))
+            inter_step_us = 1_000_000 / max(min_speed, speed)
+            self._pulse_step(pulse_us, inter_step_us)
 
-        # Send via DMA in batches (pigpio wave limit is ~12000 pulses = 6000 steps)
-        MAX_PULSES = 10000  # 5000 steps per wave, leaving headroom
-        total_sent = 0
+        self._position += sign * total_steps
 
-        for i in range(0, len(pulses), MAX_PULSES):
-            batch = pulses[i:i + MAX_PULSES]
-            self._pi.wave_add_generic(batch)
-            wid = self._pi.wave_create()
-            if wid < 0:
-                # Fallback: software timing for this batch
-                for j in range(0, len(batch), 2):
-                    self._pi.gpio_trigger(self._step_pin, pulse_us, 1)
-                    time.sleep(max(0, (batch[j + 1].delay) / 1_000_000))
-            else:
-                self._pi.wave_send_once(wid)
-                while self._pi.wave_tx_busy():
-                    time.sleep(0.001)
-                self._pi.wave_delete(wid)
-            total_sent += len(batch) // 2
-
-        self._position += sign * total_sent
+    def _pulse_step(self, pulse_us, inter_step_us):
+        """
+        Generate a single STEP pulse with specified pulse width and inter-step timing.
+        
+        Matches ESP32 approach:
+          - Write STEP HIGH
+          - Sleep for pulse_us
+          - Write STEP LOW
+          - Sleep for (inter_step_us - pulse_us)
+        """
+        self._pi.write(self._step_pin, 1)
+        time.sleep(pulse_us / 1_000_000)
+        self._pi.write(self._step_pin, 0)
+        time.sleep((inter_step_us - pulse_us) / 1_000_000)
 
     def move_to(self, target):
         """
