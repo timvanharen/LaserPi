@@ -158,25 +158,37 @@ def main():
     print("Finds the mechanical limits of each mirror axis.")
     print("SAFETY: Keep the beam path clear during calibration.\n")
 
-    # Initialize TMC2209 drivers via UART
-    print("Configuring TMC2209 drivers via UART...")
-    try:
-        tmc_x = TMC2209('/dev/ttyAMA0', address=0)  # X motor, address 0 (MS1=GND, MS2=GND)
-        tmc_x.set_current_rms(400)     # 400mA limit
-        tmc_x.set_microstepping(16)    # 16x microstepping
-        tmc_x.set_pwm_autoscale(True)  # Smoother low-speed motion
-        tmc_x.get_status()
-        
-        tmc_y = TMC2209('/dev/ttyAMA0', address=1)  # Y motor, address 1 (MS1=3.3V, MS2=GND)
-        tmc_y.set_current_rms(400)     # 400mA limit
-        tmc_y.set_microstepping(16)    # 16x microstepping
-        tmc_y.set_pwm_autoscale(True)
-        tmc_y.get_status()
-        
-        print("✓ TMC2209 drivers configured.\n")
-    except Exception as e:
-        print(f"WARNING: Could not configure TMC2209 via UART: {e}")
-        print("Continuing with GPIO-only control (current limit may not be set).\n")
+    # Initialize TMC2209 drivers via UART (optional)
+    print("Attempting to configure TMC2209 drivers via UART...")
+    tmc_configured = False
+    
+    for port in ['/dev/ttyAMA0', '/dev/ttyS0', '/dev/serial0']:
+        try:
+            print(f"  Trying {port}...")
+            tmc_x = TMC2209(port, address=0)
+            tmc_x.set_current_rms(400)     # 400mA limit
+            tmc_x.set_microstepping(16)    # 16x microstepping
+            tmc_x.set_pwm_autoscale(True)  # Smoother low-speed motion
+            tmc_x.get_status()
+            
+            tmc_y = TMC2209(port, address=1)
+            tmc_y.set_current_rms(400)
+            tmc_y.set_microstepping(16)
+            tmc_y.set_pwm_autoscale(True)
+            tmc_y.get_status()
+            
+            print("✓ TMC2209 drivers configured via UART.\n")
+            tmc_configured = True
+            break
+        except Exception as e:
+            print(f"  ✗ {port} failed: {e}")
+            continue
+    
+    if not tmc_configured:
+        print("\nWARNING: UART configuration failed. Using GPIO-only control.")
+        print("  Current limit may not be properly set.")
+        print("  To fix: Enable UART in 'sudo raspi-config' → Interfacing Options → Serial Port")
+        print("  Then set 'Would you like the serial port hardware to be enabled?' → YES\n")
 
     results = {}
 
