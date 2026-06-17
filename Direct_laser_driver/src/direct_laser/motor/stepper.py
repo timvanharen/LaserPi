@@ -145,6 +145,8 @@ class Stepper:
                 return
 
         # Set direction
+        dir_name = "FORWARD(+)" if direction == self.POSITIVE else "BACKWARD(-)"
+        print(f"[{self.name}] DIR={dir_name} ({direction}), steps={count}")
         self._pi.write(self._dir_pin, direction)
         time.sleep(0.000005)  # 5 µs direction setup time
 
