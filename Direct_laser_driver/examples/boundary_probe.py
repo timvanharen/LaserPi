@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 import pigpio
 from direct_laser.motor.stepper import Stepper
+from direct_laser.tmc2209_uart import TMC2209
 from direct_laser import config
 
 
@@ -156,6 +157,26 @@ def main():
     print("\n=== Galvo Boundary Calibration ===")
     print("Finds the mechanical limits of each mirror axis.")
     print("SAFETY: Keep the beam path clear during calibration.\n")
+
+    # Initialize TMC2209 drivers via UART
+    print("Configuring TMC2209 drivers via UART...")
+    try:
+        tmc_x = TMC2209('/dev/ttyAMA0', address=0)  # X motor, address 0 (MS1=GND, MS2=GND)
+        tmc_x.set_current_rms(400)     # 400mA limit
+        tmc_x.set_microstepping(16)    # 16x microstepping
+        tmc_x.set_pwm_autoscale(True)  # Smoother low-speed motion
+        tmc_x.get_status()
+        
+        tmc_y = TMC2209('/dev/ttyAMA0', address=1)  # Y motor, address 1 (MS1=3.3V, MS2=GND)
+        tmc_y.set_current_rms(400)     # 400mA limit
+        tmc_y.set_microstepping(16)    # 16x microstepping
+        tmc_y.set_pwm_autoscale(True)
+        tmc_y.get_status()
+        
+        print("✓ TMC2209 drivers configured.\n")
+    except Exception as e:
+        print(f"WARNING: Could not configure TMC2209 via UART: {e}")
+        print("Continuing with GPIO-only control (current limit may not be set).\n")
 
     results = {}
 

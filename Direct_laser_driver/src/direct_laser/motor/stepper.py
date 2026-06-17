@@ -103,11 +103,13 @@ class Stepper:
         """Enable the motor driver (engages holding torque)."""
         self._pi.write(self._enable_pin, 0)  # Active LOW
         self._enabled = True
+        print(f"[{self.name}] ENABLED (EN pin={self._enable_pin} set LOW)")
 
     def disable(self):
         """Disable the motor driver (releases holding torque)."""
         self._pi.write(self._enable_pin, 1)  # HIGH = disabled
         self._enabled = False
+        print(f"[{self.name}] DISABLED (EN pin={self._enable_pin} set HIGH)")
 
     def set_position(self, position):
         """Override the current position counter without moving the motor."""
