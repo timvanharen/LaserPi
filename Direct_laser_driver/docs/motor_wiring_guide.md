@@ -102,31 +102,31 @@ If your motor has a 5-pin connector:
 
 ### GPIO Pin Assignments
 
-Two drivers are needed — one for X axis, one for Y axis:
+Two drivers are needed — one for X axis, one for Y axis. The table below uses BCM numbering and the Raspberry Pi 3B+ J8 header pin numbers.
 
-| Function | X Motor GPIO (BCM) | Y Motor GPIO (BCM) | ATD5833 Pin |
-|----------|-------------------|-------------------|-------------|
-| STEP | GPIO 17 | GPIO 27 | STEP (pin 6) |
-| DIR | GPIO 18 | GPIO 22 | DIR (pin 7) |
-| EN | GPIO 4 | GPIO 5 | EN (pin 1) |
+| Function | X Motor GPIO (BCM / J8) | Y Motor GPIO (BCM / J8) | ATD5833 Pin |
+|----------|--------------------------|--------------------------|-------------|
+| STEP | GPIO 17 / pin 11 | GPIO 27 / pin 13 | STEP (pin 7) |
+| DIR | GPIO 18 / pin 12 | GPIO 22 / pin 15 | DIR (pin 8) |
+| EN | GPIO 4 / pin 7 | GPIO 5 / pin 29 | EN (pin 1) |
 
 **Optional UART (for TMC2209 configuration / StallGuard):**
 
-| Function | GPIO (BCM) | Notes |
-|----------|-----------|-------|
-| TX | GPIO 14 (UART TX) | Connect to PDN_UART on Driver X |
-| RX | GPIO 15 (UART RX) | Connect to PDN_UART on Driver X |
+| Function | Pi 3B+ pin | Notes |
+|----------|------------|-------|
+| TXD0 | GPIO 14 / pin 8 | Connect to the shared UART bus through 1kΩ |
+| RXD0 | GPIO 15 / pin 10 | Connect directly to the same shared UART bus |
 
-> **Note**: TMC2209 uses a single-wire UART interface — TX and RX share the same PDN_UART pin via a 1kΩ resistor on the TX line. To address two drivers on one UART bus, each TMC2209 must be configured with a different address (0-3) via MS1/MS2 pins at power-up.
+> **Note**: On the ATD5833 board used here, UART and PDN are separate pins. Use the UART pin for the shared bus, and tie PDN to GND unless your board documentation says otherwise. The bus is single-wire at the driver side, so both TMC2209 drivers share the same UART line and are distinguished by MS1/MS2 address pins at power-up.
 
 ### UART Single-Wire Connection
 
 ```
-Pi GPIO 14 (TX) ──[1kΩ]──┬── ATD5833 UART pin (pin 5)
-                          │
-Pi GPIO 15 (RX) ──────────┘
+Pi GPIO 14 (TXD0, pin 8) ──[1kΩ]──┬── ATD5833 UART pin (pin 5)
+                                  │
+Pi GPIO 15 (RXD0, pin 10) ────────┘
 
-ATD5833 PDN pin (pin 4) ──── GND  (leave floating or tie to GND)
+ATD5833 PDN pin (pin 4) ──── GND  (unless your board requires otherwise)
 ATD5833 CLK pin (pin 6) ──── GND  (internal oscillator)
 ```
 
