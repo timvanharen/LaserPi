@@ -121,16 +121,22 @@ class TMC2209Bus:
         request = bytes([TMC_SYNC, slave & 0x03, register | TMC_READ])
         request += bytes([crc8(request)])
 
-        self.serial.reset_input_buffer()
-        self.serial.write(request)
-        self.serial.flush()
+        try:
+            self.serial.reset_input_buffer()
+            self.serial.write(request)
+            self.serial.flush()
+        except (serial.SerialException, OSError) as exc:
+            return None, f"serial write/flush failed: {exc}"
 
         sync_target = bytes([TMC_SYNC, slave & 0x03, register | TMC_READ])
         window = bytearray()
         deadline = time.monotonic() + timeout
 
         while time.monotonic() < deadline:
-            chunk = self.serial.read(1)
+            try:
+                chunk = self.serial.read(1)
+            except (serial.SerialException, OSError) as exc:
+                return None, f"serial read failed: {exc}"
             if not chunk:
                 continue
             window.append(chunk[0])
@@ -140,7 +146,10 @@ class TMC2209Bus:
             if len(window) == 3 and bytes(window) == sync_target:
                 frame = bytearray(window)
                 while len(frame) < 8 and time.monotonic() < deadline:
-                    more = self.serial.read(8 - len(frame))
+                    try:
+                        more = self.serial.read(8 - len(frame))
+                    except (serial.SerialException, OSError) as exc:
+                        return None, f"serial read failed: {exc}"
                     if more:
                         frame.extend(more)
 
@@ -288,15 +297,21 @@ class StepperAxis:
             print(f"[{self.name}] motor disabled; press enable first")
             return
 
+        # Always assert direction setup timing before a burst.
+        self.set_direction(self.direction)
+
         delay_us = 1000000.0 / max(1, self.current_speed) / 2.0
-        print(f"[{self.name}] running {steps} steps at {self.current_speed} steps/s")
+        print(
+            f"[{self.name}] running {steps} steps at {self.current_speed} steps/s "
+            f"(STEP pin {self.step_pin}, DIR pin {self.dir_pin}={self.direction}, EN pin {self.en_pin})"
+        )
         for i in range(steps):
             self.pi.write(self.step_pin, 1)
             time.sleep(delay_us / 1000000.0)
             self.pi.write(self.step_pin, 0)
             time.sleep(delay_us / 1000000.0)
             if (i + 1) % 100 == 0:
-                print(f"  {i + 1} / {steps}")
+                print(f"  {i + 1} / {steps}", flush=True)
 
 
 def print_banner():
@@ -418,9 +433,13 @@ def main():
             elif ch == 'S':
                 y_axis.step(y_axis.POSITIVE, 32)
             elif ch == 'r':
+                if not x_axis.enabled:
+                    x_axis.enable()
                 x_axis.current_speed = 300
                 x_axis.run_continuous(3000)
             elif ch == 'R':
+                if not y_axis.enabled:
+                    y_axis.enable()
                 y_axis.current_speed = 300
                 y_axis.run_continuous(3000)
             elif ch == 'd':
@@ -454,8 +473,12 @@ def main():
                 if uart is None:
                     print("UART is not available.")
                 else:
-                    uart.info("X", 0)
-                    uart.info("Y", 1)
+                    try:
+                        uart.info("X", 0)
+                        uart.info("Y", 1)
+                    except (serial.SerialException, OSError) as exc:
+                        print(f"UART read failed: {exc}")
+                        print("Continuing without UART. Motion control remains available.")
             elif ch == 'e':
                 x_axis.enable()
                 y_axis.enable()
