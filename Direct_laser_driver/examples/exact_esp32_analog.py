@@ -48,10 +48,10 @@ UART_PORT = "/dev/serial0"
 UART_BAUD = 115200
 
 # Conservative pulse timing for Linux userspace GPIO toggling.
-# Longer periods make behavior easier to validate while debugging.
+# Keep this intentionally slow for deterministic bring-up.
 DIR_SETUP_US = 20
-STEP_HIGH_US = 20
-STEP_LOW_US = 200
+STEP_HIGH_US = 50
+STEP_LOW_US = 2000
 
 TMC_SYNC = 0x05
 TMC_READ = 0x00
@@ -84,6 +84,10 @@ class TMC2209Bus:
     def __init__(self, port=UART_PORT, baud=UART_BAUD):
         self.port_name = port
         self.serial = serial.Serial(port, baudrate=baud, timeout=0.05)
+        # Keep a local shadow of write-only config to avoid blocking read-backs
+        # during initialization on noisy or half-working UART buses.
+        self._chopconf = {}
+        self._pwmconf = {}
 
     def close(self):
         if self.serial.is_open:
@@ -158,14 +162,13 @@ class TMC2209Bus:
         ihold_irun = (iholddelay << 16) | (irun << 8) | ihold
         self.write_register(slave, TMC_REG_IHOLD_IRUN, ihold_irun)
 
-        chopconf, _ = self.read_register(slave, TMC_REG_CHOPCONF)
-        if chopconf is None:
-            chopconf = 0x10000053
+        chopconf = self._chopconf.get(slave, 0x10000053)
         if vsense:
             chopconf |= (1 << 17)
         else:
             chopconf &= ~(1 << 17)
         self.write_register(slave, TMC_REG_CHOPCONF, chopconf)
+        self._chopconf[slave] = chopconf
 
         print(f"    current={current_ma}mA, IRUN={irun}, IHOLD={ihold}, vsense={'ON' if vsense else 'OFF'}")
 
@@ -174,23 +177,21 @@ class TMC2209Bus:
         if microsteps not in mres_map:
             raise ValueError(f"unsupported microsteps: {microsteps}")
 
-        chopconf, _ = self.read_register(slave, TMC_REG_CHOPCONF)
-        if chopconf is None:
-            chopconf = 0x10000053
+        chopconf = self._chopconf.get(slave, 0x10000053)
         chopconf &= ~(0x0F << 24)
         chopconf |= (mres_map[microsteps] & 0x0F) << 24
         self.write_register(slave, TMC_REG_CHOPCONF, chopconf)
+        self._chopconf[slave] = chopconf
         print(f"    microsteps={microsteps}")
 
     def set_pwm_autoscale(self, slave, enable=True):
-        pwmconf, _ = self.read_register(slave, TMC_REG_PWMCONF)
-        if pwmconf is None:
-            pwmconf = 0xC10D0024
+        pwmconf = self._pwmconf.get(slave, 0xC10D0024)
         if enable:
             pwmconf |= (1 << 18)
         else:
             pwmconf &= ~(1 << 18)
         self.write_register(slave, TMC_REG_PWMCONF, pwmconf)
+        self._pwmconf[slave] = pwmconf
         print(f"    pwm_autoscale={'ON' if enable else 'OFF'}")
 
     def set_stallguard(self, slave, threshold):
@@ -304,11 +305,11 @@ def print_help():
     print("Commands:")
     print("  s   jog X (+32 steps)")
     print("  S   jog Y (+32 steps)")
-    print("  r   run X continuously")
-    print("  R   run Y continuously")
+    print("  r   run X continuously (slow debug speed)")
+    print("  R   run Y continuously (slow debug speed)")
     print("  d   toggle X direction")
     print("  D   toggle Y direction")
-    print("  1-5 speed tests on X: 500/1000/2000/4000/8000")
+    print("  1-5 speed tests on X: 100/200/400/800/1200")
     print("  h   home motors (placeholder/manual)")
     print("  c   center motors (placeholder/manual)")
     print("  i   read TMC2209 info over UART")
@@ -362,6 +363,11 @@ def main():
         print("Continuing with GPIO-only stepping.")
         print("Tip: without UART config, very tiny moves may look like jitter. Use s/S jogs and r/R runs.")
 
+    # Match the practical test flow: start with X enabled so 's'/'r' work immediately.
+    x_axis.enable()
+    y_axis.disable()
+    print("Startup state: X enabled, Y disabled")
+
     print_help()
 
     try:
@@ -379,10 +385,10 @@ def main():
             elif ch == 'S':
                 y_axis.step(y_axis.POSITIVE, 32)
             elif ch == 'r':
-                x_axis.current_speed = 3000
+                x_axis.current_speed = 300
                 x_axis.run_continuous(3000)
             elif ch == 'R':
-                y_axis.current_speed = 3000
+                y_axis.current_speed = 300
                 y_axis.run_continuous(3000)
             elif ch == 'd':
                 x_axis.direction = StepperAxis.NEGATIVE if x_axis.direction == StepperAxis.POSITIVE else StepperAxis.POSITIVE
@@ -393,19 +399,19 @@ def main():
                 y_axis.pi.write(y_axis.dir_pin, y_axis.direction)
                 print(f"Y Direction: {'CW' if y_axis.direction else 'CCW'}")
             elif ch == '1':
-                x_axis.current_speed = 500
+                x_axis.current_speed = 100
                 x_axis.run_continuous(500)
             elif ch == '2':
-                x_axis.current_speed = 1000
+                x_axis.current_speed = 200
                 x_axis.run_continuous(1000)
             elif ch == '3':
-                x_axis.current_speed = 2000
+                x_axis.current_speed = 400
                 x_axis.run_continuous(2000)
             elif ch == '4':
-                x_axis.current_speed = 4000
+                x_axis.current_speed = 800
                 x_axis.run_continuous(4000)
             elif ch == '5':
-                x_axis.current_speed = 8000
+                x_axis.current_speed = 1200
                 x_axis.run_continuous(8000)
             elif ch == 'h':
                 print("Homing is not implemented in this analog. Use the UART probe + manual limit workflow.")
