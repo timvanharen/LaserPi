@@ -23,6 +23,7 @@ UART uses the Pi hardware serial port:
 import os
 import sys
 import time
+import argparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -46,6 +47,7 @@ EN_PIN_Y = config.MOTOR_Y_EN
 
 UART_PORT = "/dev/serial0"
 UART_BAUD = 115200
+UART_STARTUP_TIMEOUT_S = 2.0
 
 # Conservative pulse timing for Linux userspace GPIO toggling.
 # Keep this intentionally slow for deterministic bring-up.
@@ -83,7 +85,13 @@ def crc8(datagram):
 class TMC2209Bus:
     def __init__(self, port=UART_PORT, baud=UART_BAUD):
         self.port_name = port
-        self.serial = serial.Serial(port, baudrate=baud, timeout=0.05)
+        self.serial = serial.Serial(
+            port,
+            baudrate=baud,
+            timeout=0.03,
+            write_timeout=0.10,
+            inter_byte_timeout=0.02,
+        )
         # Keep a local shadow of write-only config to avoid blocking read-backs
         # during initialization on noisy or half-working UART buses.
         self._chopconf = {}
@@ -107,7 +115,7 @@ class TMC2209Bus:
         self.serial.reset_input_buffer()
         self.serial.write(packet)
         self.serial.flush()
-        time.sleep(0.01)
+        time.sleep(0.002)
 
     def read_register(self, slave, register, timeout=0.25):
         request = bytes([TMC_SYNC, slave & 0x03, register | TMC_READ])
@@ -323,6 +331,16 @@ def print_help():
     print("  q   quit")
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="ESP32-style dual TMC2209 test for Raspberry Pi 3B+")
+    parser.add_argument(
+        "--skip-uart",
+        action="store_true",
+        help="Skip all UART configuration and start immediately with GPIO-only stepping",
+    )
+    return parser.parse_args()
+
+
 def make_pi():
     pi = pigpio.pi()
     if not pi.connected:
@@ -337,6 +355,7 @@ def init_lasers(pi):
 
 
 def main():
+    args = parse_args()
     print_banner()
 
     pi = make_pi()
@@ -350,18 +369,32 @@ def main():
 
     uart = None
     uart_ok = False
-    try:
-        uart = TMC2209Bus()
-        print(f"UART opened on {UART_PORT}")
-        print("Configuring TMC2209 drivers...")
-        uart.configure_axis("X", 0, current_ma=600, microsteps=16, stall_threshold=64)
-        uart.configure_axis("Y", 1, current_ma=600, microsteps=16, stall_threshold=64)
-        print("Configuration complete.")
-        uart_ok = True
-    except Exception as exc:
-        print(f"WARNING: UART unavailable or not wired: {exc}")
-        print("Continuing with GPIO-only stepping.")
-        print("Tip: without UART config, very tiny moves may look like jitter. Use s/S jogs and r/R runs.")
+    if args.skip_uart:
+        print("UART startup skipped (--skip-uart).")
+    else:
+        start_t = time.monotonic()
+        try:
+            uart = TMC2209Bus()
+            print(f"UART opened on {UART_PORT}")
+            print("Configuring TMC2209 drivers...")
+            uart.configure_axis("X", 0, current_ma=600, microsteps=16, stall_threshold=64)
+
+            if (time.monotonic() - start_t) > UART_STARTUP_TIMEOUT_S:
+                raise TimeoutError("startup timeout after X-axis configuration")
+
+            uart.configure_axis("Y", 1, current_ma=600, microsteps=16, stall_threshold=64)
+
+            if (time.monotonic() - start_t) > UART_STARTUP_TIMEOUT_S:
+                raise TimeoutError("startup timeout after Y-axis configuration")
+
+            print("Configuration complete.")
+            uart_ok = True
+        except Exception as exc:
+            elapsed = time.monotonic() - start_t
+            print(f"WARNING: UART unavailable or not wired: {exc}")
+            print(f"UART startup aborted after {elapsed:.2f}s (limit {UART_STARTUP_TIMEOUT_S:.1f}s).")
+            print("Continuing with GPIO-only stepping.")
+            print("Tip: run with --skip-uart to start immediately when debugging STEP/DIR wiring.")
 
     # Match the practical test flow: start with X enabled so 's'/'r' work immediately.
     x_axis.enable()
