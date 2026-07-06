@@ -47,6 +47,12 @@ EN_PIN_Y = config.MOTOR_Y_EN
 UART_PORT = "/dev/serial0"
 UART_BAUD = 115200
 
+# Conservative pulse timing for Linux userspace GPIO toggling.
+# Longer periods make behavior easier to validate while debugging.
+DIR_SETUP_US = 20
+STEP_HIGH_US = 20
+STEP_LOW_US = 200
+
 TMC_SYNC = 0x05
 TMC_READ = 0x00
 TMC_WRITE = 0x80
@@ -251,6 +257,7 @@ class StepperAxis:
     def set_direction(self, direction):
         self.direction = self.POSITIVE if direction else self.NEGATIVE
         self.pi.write(self.dir_pin, self.direction)
+        time.sleep(DIR_SETUP_US / 1_000_000.0)
 
     def step(self, direction, count):
         if not self.enabled:
@@ -263,9 +270,9 @@ class StepperAxis:
 
         for _ in range(count):
             self.pi.write(self.step_pin, 1)
-            time.sleep(0.000010)
+            time.sleep(STEP_HIGH_US / 1_000_000.0)
             self.pi.write(self.step_pin, 0)
-            time.sleep(0.000010)
+            time.sleep(STEP_LOW_US / 1_000_000.0)
 
     def run_continuous(self, steps):
         if not self.enabled:
@@ -295,8 +302,8 @@ def print_banner():
 
 def print_help():
     print("Commands:")
-    print("  s   single step X")
-    print("  S   single step Y")
+    print("  s   jog X (+32 steps)")
+    print("  S   jog Y (+32 steps)")
     print("  r   run X continuously")
     print("  R   run Y continuously")
     print("  d   toggle X direction")
@@ -341,6 +348,7 @@ def main():
     y_axis.direction = StepperAxis.NEGATIVE
 
     uart = None
+    uart_ok = False
     try:
         uart = TMC2209Bus()
         print(f"UART opened on {UART_PORT}")
@@ -348,9 +356,11 @@ def main():
         uart.configure_axis("X", 0, current_ma=600, microsteps=16, stall_threshold=64)
         uart.configure_axis("Y", 1, current_ma=600, microsteps=16, stall_threshold=64)
         print("Configuration complete.")
+        uart_ok = True
     except Exception as exc:
         print(f"WARNING: UART unavailable or not wired: {exc}")
         print("Continuing with GPIO-only stepping.")
+        print("Tip: without UART config, very tiny moves may look like jitter. Use s/S jogs and r/R runs.")
 
     print_help()
 
@@ -365,9 +375,9 @@ def main():
             if ch == 'q':
                 break
             elif ch == 's':
-                x_axis.step(x_axis.POSITIVE, 1)
+                x_axis.step(x_axis.POSITIVE, 32)
             elif ch == 'S':
-                y_axis.step(y_axis.POSITIVE, 1)
+                y_axis.step(y_axis.POSITIVE, 32)
             elif ch == 'r':
                 x_axis.current_speed = 3000
                 x_axis.run_continuous(3000)
